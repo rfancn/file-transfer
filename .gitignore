@@ -36,6 +36,8 @@ go.work.sum
 bin/
 # 本地实际配置（从 *.example.* 复制）
 *.toml
+# 示例配置需要纳入版本管理
+!config/*.example.toml
 # ft-server 本地管理员账号
 secrets/
 

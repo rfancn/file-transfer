@@ -192,7 +192,7 @@ make build
   incomplete_days = 3
 ```
 
-完整配置见 [config/server.example.toml](config/server.example.toml)。首次启动时：
+完整配置见 [config/ft-server.example.toml](config/ft-server.example.toml)。首次启动时：
 
 - `auth.token_secret` / `auth.upload_secret` 为空或仍为示例值时，会自动生成随机密钥并写回配置；
 - 自动生成管理员账号 `admin` 和 10 位随机密码，保存在 `ft-server` 当前工作目录的 `secrets/user.json`（0600），日志中只输出一次密码。
@@ -217,7 +217,7 @@ docker compose up -d --build
 配置、密钥和日志分别持久化到 `./config`、`./secrets`、`./logs`（日志文件为 `./logs/ft-server/ft-server.log`）。首次启动会自动生成 `./config/ft-server.toml`；如需自定义配置，可先复制示例文件再启动：
 
 ```sh
-cp config/server.example.toml config/ft-server.toml
+cp config/ft-server.example.toml config/ft-server.toml
 ```
 
 RustFS 地址和桶名可通过 `FT_S3_ENDPOINT`、`FT_BUCKET` 环境变量（或 `.env` 文件）覆盖。
@@ -260,7 +260,7 @@ ft-client register
 sudo ./script/install.sh
 ```
 
-安装脚本会写入 `/etc/file-transfer/config.toml`，也可以非交互指定服务端地址：
+安装脚本会写入 `/etc/file-transfer/ft-client.toml`，也可以非交互指定服务端地址：
 
 ```sh
 sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
@@ -270,7 +270,7 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 
 ### 配置
 
-默认读取 `/etc/file-transfer/config.toml`，可用 `-c`、`-config` 或 `FT_CLIENT_CONFIG` 指定；`FT_SERVER_URL` 可覆盖服务端地址。
+默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c`、`-config` 或 `FT_CLIENT_CONFIG` 指定；`FT_SERVER_URL` 可覆盖服务端地址。
 
 ```toml
 [server]
@@ -320,7 +320,7 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 
 ### 配置与登录
 
-- 默认读取 `/etc/file-transfer/config.toml`（与 `ft-client` 共用），只使用 `[server] url`。
+- 默认读取 `/etc/file-transfer/ft-client.toml`（与 `ft-client` 共用），只使用 `[server] url`。
 - 配置文件可用 `-config` 或 `FT_ADMIN_CONFIG` 指定；`FT_SERVER_URL` 可覆盖服务端地址。
 - 管理员账号密码通过 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` 提供，否则启动时交互输入。
 - 启动后先登录 `ft-server`，再显示菜单或执行子命令。

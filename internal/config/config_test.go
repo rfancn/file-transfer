@@ -141,12 +141,9 @@ func TestAdminEnvConfigLoads(t *testing.T) {
 }
 
 func TestDefaultServerConfig(t *testing.T) {
-	p := DefaultServerConfig()
-	if filepath.Base(p) != "ft-server.toml" {
-		t.Fatalf("默认配置文件名不符: %s", p)
-	}
-	if !filepath.IsAbs(p) {
-		t.Fatalf("默认配置应为可执行文件同目录的绝对路径: %s", p)
+	p := DefaultServerConfig
+	if p != "/etc/file-transfer/ft-server.toml" {
+		t.Fatalf("默认配置路径不符: %s", p)
 	}
 }
 

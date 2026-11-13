@@ -16,26 +16,14 @@ import (
 )
 
 const (
-	DefaultClientConfig   = "/etc/file-transfer/config.toml"
-	DefaultAdminConfig    = DefaultClientConfig
-	defaultServerFileName = "ft-server.toml"
+	DefaultClientConfig = "/etc/file-transfer/ft-client.toml"
+	DefaultAdminConfig  = DefaultClientConfig
+	DefaultServerConfig = "/etc/file-transfer/ft-server.toml"
 
 	// 示例配置中的默认值；启动时若仍为该值会输出 WARN。
 	DefaultTokenSecret  = "ft-server-default-token-secret-change-me"
 	DefaultUploadSecret = "ft-server-default-upload-secret-change-me"
 )
-
-// DefaultServerConfig 默认与 ft-server 可执行文件同目录，不安装到 /etc。
-func DefaultServerConfig() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return defaultServerFileName
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	return filepath.Join(filepath.Dir(exe), defaultServerFileName)
-}
 
 // Credentials 是一组 RustFS S3 凭据。
 type Credentials struct {
@@ -238,7 +226,7 @@ func DefaultAdmin() AdminConfig {
 
 func LoadServer(path string) (ServerConfig, error) {
 	if path == "" {
-		path = envOr("FT_SERVER_CONFIG", DefaultServerConfig())
+		path = envOr("FT_SERVER_CONFIG", DefaultServerConfig)
 	}
 	cfg := DefaultServer()
 	if _, err := os.Stat(path); err == nil {

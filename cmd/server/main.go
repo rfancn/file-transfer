@@ -32,7 +32,7 @@ func main() {
 	if *cfgPath == "" {
 		*cfgPath = os.Getenv("FT_SERVER_CONFIG")
 		if *cfgPath == "" {
-			*cfgPath = config.DefaultServerConfig()
+			*cfgPath = config.DefaultServerConfig
 		}
 	}
 	if err := logging.Init(cfg.Server.LogFile, logging.Rotate{
