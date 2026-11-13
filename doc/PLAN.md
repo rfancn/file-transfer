@@ -96,7 +96,7 @@ file-transfer/
 
 ### 4.2 配置
 
-`ft-server.toml` 与可执行文件同目录，也可用 `-c` 指定：
+`ft-server.toml` 默认读取 `/etc/file-transfer/ft-server.toml`，也可用 `-c` 指定：
 
 ```toml
 [server]
@@ -199,7 +199,7 @@ event=audit action actor actor_type target result request_id remote_ip
 
 ### 5.1 启动与凭证
 
-- 默认读取 `/etc/file-transfer/config.toml`，可用 `-c` 或 `FT_CLIENT_CONFIG` 覆盖。
+- 默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c` 或 `FT_CLIENT_CONFIG` 覆盖。
 - 本地凭证保存在 `~/.file-transfer`（TOML，0600）：
 
 ```toml
@@ -258,7 +258,7 @@ password = "Abcd1234!"
 
 ## 6. ft-admin
 
-- 默认读取 `/etc/file-transfer/config.toml`（TOML，与 ft-client 共用），只读取 `[server] url`；可用 `-c` 或 `FT_ADMIN_CONFIG` 覆盖。
+- 默认读取 `/etc/file-transfer/ft-client.toml`（TOML，与 ft-client 共用），只读取 `[server] url`；可用 `-c` 或 `FT_ADMIN_CONFIG` 覆盖。
 - 管理员凭证通过 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` 提供。
 - 交互使用 promptui：菜单、输入、密码遮罩、确认；ESC 返回、Ctrl+C 退出。
 - 菜单功能：添加用户、删除用户、重置密码、列出用户、清理数据、初始化。
@@ -274,8 +274,8 @@ make test
 
 - `ft-server`：与 RustFS 同机，systemd 运行，配置 `ft-server.toml`。
 - `ft-admin init`：初始化桶、IAM 身份和策略。
-- `ft-client`：`script/install.sh` 安装二进制和 `/etc/file-transfer/config.toml`。
-- 示例配置：`config/client.example.toml`、`config/server.example.toml`。
+- `ft-client`：`script/install.sh` 安装二进制和 `/etc/file-transfer/ft-client.toml`。
+- 示例配置：`config/ft-client.example.toml`、`config/ft-server.example.toml`。
 
 目录结构：
 

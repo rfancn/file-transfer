@@ -10,10 +10,10 @@ set -eu
 
 SRC_DIR="${FT_SRC_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 CLIENT_BIN="$SRC_DIR/bin/ft-client"
-CLIENT_CONF="$SRC_DIR/config/client.example.toml"
+CLIENT_CONF="$SRC_DIR/config/ft-client.example.toml"
 PREFIX="${PREFIX:-/usr/local}"
 CONF_DIR="${FT_CONF_DIR:-/etc/file-transfer}"
-CONF_FILE="$CONF_DIR/config.toml"
+CONF_FILE="$CONF_DIR/ft-client.toml"
 FT_SERVER_URL="${FT_SERVER_URL:-}"
 
 error() {

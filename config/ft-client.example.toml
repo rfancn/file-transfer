@@ -1,0 +1,16 @@
+# ft-client 配置
+# 默认路径：/etc/file-transfer/ft-client.toml
+# 也可用 -c /path/to/config.toml 指定。
+
+[server]
+  url = "http://ft-server:8080"
+
+# 上传前数据量提示阈值：文件数或总大小超过任意一项时给出醒目警告。
+# 设为 0 可关闭对应提示。
+[upload]
+  warn_files = 20
+  warn_size = "100MiB"
+
+# 下载确认中文件名的显示宽度（终端列数），默认 80。
+[download]
+  name_width = 80
