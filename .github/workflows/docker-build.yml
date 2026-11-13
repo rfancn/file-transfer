@@ -32,11 +32,8 @@ jobs:
         with:
           images: rfancn/file-transfer
           tags: |
-            # v1.2.3 -> 1.2.3
+            # v1.2.3 -> 1.2.3（稳定版 semver 由 latest=auto 自动附带 latest，预发布版不会）
             type=semver,pattern={{version}}
-
-            # v1.2.3 发布时同时更新 latest
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
             # 手动执行时使用 sha-<short>，避免覆盖 latest
             type=sha,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
