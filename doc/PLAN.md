@@ -42,23 +42,24 @@ file-transfer/
 ```
 
 - `ft-server` 与 RustFS 同机，通过 `127.0.0.1:9000` 访问。
-- 客户端与服务端在同一局域网，明文 HTTP，不使用 TLS。
+- 客户端与服务端支持 HTTP 和 HTTPS；跨不可信网络时应使用 HTTPS。
 - 客户端不持有 S3 服务凭据；`ft-server` 使用 `ft-data`/`ft-admin` 服务身份代理。
 
 ## 3. 权限模型
 
 | 身份 | inbound | outbound | upload |
 |---|---|---|---|
-| `<user>`（Console） | List、Get | List | List、Get、Put |
+| `<user>`（Console） | List | List | List、Put、Delete（目录标记除外） |
 | `ft-data`（数据面） | List、Get | List、Put | List、Get |
 | `ft-admin`（管理面） | 管理、删除 | 管理、删除 | 管理、删除 |
-| `ft-operator`（操作员） | List、Put、递归 List、Delete（`.keep` 除外） | List、Get | 无 |
+| `ft-operator-group`（操作员组） | List、Put、递归 List、Delete（`.keep` 除外） | List、Get | 无 |
 | `ft-client`（经 ft-server） | List、Get | List、Put | List、Get |
 
 - 用户个人策略限制在自己的 `<username>/` 前缀内。
 - `ft-data` 只写 `outbound`，只读 `inbound`/`upload`，并可为三个目录创建 `.keep` 占位。
-- `ft-operator` 可浏览所有用户的 `inbound`/`outbound`，可递归列出并删除 `inbound` 内容；`inbound/.keep` 显式 Deny 删除；不能进入 `upload`。
-- 普通用户 Console 策略无法在 S3 层把根目录列表过滤为“只显示自己的目录”，因此可能看到其他用户的顶层目录名，但无法读取内容。
+- `ft-operator-group` 可浏览所有用户的 `inbound`/`outbound`，可递归列出并删除 `inbound` 内容；`inbound/.keep` 显式 Deny 删除；不能进入 `upload`。
+- 普通用户在 Console/Cyberduck 中只能操作自己的 `inbound`/`outbound`/`upload`：三个目录都可列出，`upload/*` 可写入和删除，但 `upload/.keep` 受 Deny 保护，不能删除 `upload` 目录本身；`inbound`/`outbound` 不可下载、不可写入、不可删除。
+- 用户组策略不授予 `s3:ListAllMyBuckets`，桶根目录不可列；Cyberduck 默认路径需设为 `<bucket>/<username>`。
 
 ## 4. ft-server
 
@@ -244,7 +245,7 @@ password = "Abcd1234!"
 - 中断判断综合本地任务状态、远端批次文件比对和分片状态。
 - 中断后可选「断点续传（沿用原批次）」或「重新上传（新批次，覆盖本次文件）」。
 - 清单确认中比较上次任务和本次文件集，显示新增/缺失/修改/未变；文件减少时提示续传不会删除远端旧文件。
-- 上传完成后提示批次号，并要求向 ft-operator 提供批次号以发起拷出流程。
+- 上传完成后提示批次号，并要求向摆渡操作员提供批次号以发起拷出流程。
 - 上传完成或部分失败后直接退出程序；上传前取消返回上级菜单。
 
 ### 5.5 下载
@@ -253,7 +254,7 @@ password = "Abcd1234!"
 - **upload**：文件和目录可多选；空格勾选、回车进入目录、`[确认下载清单]` 汇总下载。
 - 勾选上级目录后，下级文件和目录显示为已选；部分选中显示 `[-]`。
 - 下载清单按路径展示：整个目录折叠为 `目录/` 并标注文件数/大小，部分选中列出具体文件；超长路径中间省略。
-- 确认清单后才询问保存路径（默认本地当前路径），随后开始下载。
+- 确认清单后才询问保存路径（默认本地当前路径），随后开始下载；本地已存在同名文件时可选择覆盖或跳过。
 - 下载完成或部分失败后直接退出程序。
 
 ## 6. ft-admin
@@ -291,11 +292,11 @@ script/ft-clean.sh
 
 ## 8. 安全与限制
 
-- 仅限局域网明文 HTTP；`ft-server` 的 8080 端口不应暴露到不可信网络。
+- 支持 HTTP 和 HTTPS；`ft-server` 的管理端口不应暴露到不可信网络。
 - token 默认 24 小时；客户端收到 401 自动重登并重试一次。
 - 客户端账号密码以明文保存在 `~/.file-transfer`（0600）；不需要自动登录时删除该文件。
-- `ft-operator` 可删除所有用户 `inbound/` 内容，但 `inbound/.keep` 受 Deny 保护；策略变更需重启 `ft-server` 生效。
+- `ft-operator-group` 可删除所有用户 `inbound/` 内容，但 `inbound/.keep` 受 Deny 保护；策略变更需重启 `ft-server` 生效。
 - 审计中的客户端用户名/主机名来自请求头，可被伪造。
-- 普通用户在 Console 中可能看到其他用户的顶层目录名，但无法读取内容。
-- 旧批次目录不会自动删除；需要 ft-operator 或管理员按批次清理。
+- 普通用户的 ListBucket 前缀限制在自己的用户名下，无法列出桶根或其他用户目录。
+- 旧批次目录不会自动删除；需要操作员或管理员按批次清理。
 - 不实现限流、配额和 RPM/DEB 打包。

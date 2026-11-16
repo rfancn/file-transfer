@@ -11,12 +11,10 @@ import (
 	"strings"
 )
 
-func (c *Client) Download(ctx context.Context, dir, rel, destDir string, force bool, progress ProgressFunc) error {
+// LocalPath 计算远端相对路径 rel（含或不含 dir/ 前缀）在 destDir 下的本地保存位置。
+func LocalPath(dir, rel, destDir string) (string, error) {
 	if destDir == "" {
 		destDir = "."
-	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return err
 	}
 	pathWithin := rel
 	if strings.HasPrefix(pathWithin, dir+"/") {
@@ -24,9 +22,22 @@ func (c *Client) Download(ctx context.Context, dir, rel, destDir string, force b
 	}
 	clean := filepath.Clean(filepath.FromSlash(pathWithin))
 	if clean == "." || clean == ".." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("非法的下载路径: %s", rel)
+		return "", fmt.Errorf("非法的下载路径: %s", rel)
 	}
-	target := filepath.Join(destDir, clean)
+	return filepath.Join(destDir, clean), nil
+}
+
+func (c *Client) Download(ctx context.Context, dir, rel, destDir string, force bool, progress ProgressFunc) error {
+	if destDir == "" {
+		destDir = "."
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	target, err := LocalPath(dir, rel, destDir)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}

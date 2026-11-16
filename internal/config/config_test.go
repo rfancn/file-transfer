@@ -262,6 +262,23 @@ func TestServiceSecretsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServiceSecretsKeepSpecialCharactersReadable(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := Credentials{AccessKey: "ft-data", SecretKey: "data&secret"}
+	admin := Credentials{AccessKey: "ft-admin", SecretKey: "admin&secret"}
+	if err := SaveServiceSecrets(data, admin); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "secrets", "s3_credentials.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "data&secret") || !strings.Contains(string(raw), "admin&secret") {
+		t.Fatalf("凭据内容不符: %s", raw)
+	}
+}
+
 func TestServerRetentionDefaults(t *testing.T) {
 	r := DefaultServer().Retention
 	if r.InboundDays != 3 || r.UploadDays != 3 || r.OutboundDays != 0 || r.IncompleteDays != 3 {

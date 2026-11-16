@@ -36,7 +36,7 @@ func TestPoliciesValidJSON(t *testing.T) {
 	}
 }
 
-func TestUserGroupPolicyUploadOnly(t *testing.T) {
+func TestUserGroupPolicyUploadScope(t *testing.T) {
 	p := loadTestPolicies(t)
 	var doc struct {
 		Statement []struct {
@@ -53,34 +53,27 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 		"s3:AbortMultipartUpload":     true,
 		"s3:ListMultipartUploadParts": true,
 		"s3:PutObjectTagging":         true,
-	}
-	denyActions := map[string]bool{
-		"s3:DeleteObject":        true,
-		"s3:DeleteObjectVersion": true,
-		"s3:DeleteObjectTagging": true,
+		"s3:DeleteObject":             true,
+		"s3:DeleteObjectVersion":      true,
 	}
 	seenAllow := map[string]bool{}
-	seenDeny := map[string]bool{}
 	uploadResource := "arn:aws:s3:::file-transfer/${aws:username}/upload/*"
+	protectResources := map[string]bool{
+		"arn:aws:s3:::file-transfer/${aws:username}/upload/.keep": false,
+		"arn:aws:s3:::file-transfer/${aws:username}/upload/":      false,
+	}
 	for _, st := range doc.Statement {
 		for _, action := range st.Action {
 			if action == "s3:GetObject" || action == "s3:ListAllMyBuckets" || action == "s3:ListBucketMultipartUploads" {
 				t.Fatalf("user group must not grant %s", action)
 			}
-			if allowActions[action] {
-				seenAllow[action] = true
+			if !allowActions[action] || st.Effect != "Allow" {
+				continue
 			}
-			if denyActions[action] {
-				if st.Effect != "Deny" {
-					t.Fatalf("%s must be denied, got effect %s", action, st.Effect)
-				}
-				seenDeny[action] = true
-			}
-			if allowActions[action] || denyActions[action] {
-				for _, res := range st.Resource {
-					if res != uploadResource {
-						t.Fatalf("%s resource outside upload: %s", action, res)
-					}
+			seenAllow[action] = true
+			for _, res := range st.Resource {
+				if res != uploadResource {
+					t.Fatalf("%s resource outside upload: %s", action, res)
 				}
 			}
 		}
@@ -95,9 +88,24 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 			t.Fatalf("user group missing upload action %s", action)
 		}
 	}
-	for action := range denyActions {
-		if !seenDeny[action] {
-			t.Fatalf("user group missing deny action %s", action)
+	for _, st := range doc.Statement {
+		if st.Effect != "Deny" {
+			continue
+		}
+		for _, action := range st.Action {
+			if action != "s3:DeleteObject" && action != "s3:DeleteObjectVersion" {
+				continue
+			}
+			for _, res := range st.Resource {
+				if _, ok := protectResources[res]; ok {
+					protectResources[res] = true
+				}
+			}
+		}
+	}
+	for res, seen := range protectResources {
+		if !seen {
+			t.Fatalf("user group must deny deleting %s", res)
 		}
 	}
 	text := string(p.Group)
@@ -105,15 +113,56 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 		"${aws:username}/upload",
 		"${aws:username}/upload/",
 		"${aws:username}/upload/*",
-		`"Deny"`,
+		"${aws:username}/inbound/",
+		"${aws:username}/outbound/",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("user group missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"${aws:username}/inbound", "${aws:username}/outbound"} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("user group must not mention %q", forbidden)
+}
+
+func TestUserGroupCanListOwnDirs(t *testing.T) {
+	p := loadTestPolicies(t)
+	var doc struct {
+		Statement []struct {
+			Effect    string
+			Action    []string
+			Condition map[string]map[string]any
+		}
+	}
+	if err := json.Unmarshal(p.Group, &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"${aws:username}", "${aws:username}/",
+		"${aws:username}/inbound", "${aws:username}/inbound/", "${aws:username}/inbound/*",
+		"${aws:username}/outbound", "${aws:username}/outbound/", "${aws:username}/outbound/*",
+		"${aws:username}/upload", "${aws:username}/upload/", "${aws:username}/upload/*",
+	}
+	allowed := map[string]bool{}
+	for _, st := range doc.Statement {
+		if st.Effect != "Allow" {
+			continue
+		}
+		isList := false
+		for _, a := range st.Action {
+			if a == "s3:ListBucket" {
+				isList = true
+			}
+		}
+		if !isList {
+			continue
+		}
+		for _, w := range want {
+			if hasPrefixValue(st.Condition["StringLike"]["s3:prefix"], w) {
+				allowed[w] = true
+			}
+		}
+	}
+	for _, w := range want {
+		if !allowed[w] {
+			t.Fatalf("user group ListBucket missing prefix %q", w)
 		}
 	}
 }

@@ -1011,6 +1011,53 @@ func printSelectionSummary(dir string, items []summaryItem, totalFiles int, tota
 	fmt.Println("========================================")
 }
 
+// downloadTargets 把 targets 下载到 out；目标已存在时先询问覆盖还是跳过。
+// 返回成功数、失败数和是否取消。
+func downloadTargets(cl *client.Client, dir, out string, targets []protocol.FileInfo) (int, int, bool) {
+	existing := make([]bool, len(targets))
+	conflicts := 0
+	for i, f := range targets {
+		target, err := client.LocalPath(dir, f.Path, out)
+		if err != nil {
+			continue
+		}
+		if st, err := os.Stat(target); err == nil && !st.IsDir() {
+			existing[i] = true
+			conflicts++
+		}
+	}
+	overwrite, skip := false, false
+	if conflicts > 0 {
+		choice, err := cliui.Select(fmt.Sprintf("保存路径中已有 %d 个同名文件", conflicts), []string{
+			"覆盖已存在文件",
+			"跳过已存在文件",
+			"取消下载",
+		})
+		if canceledByUser(err) || (err == nil && choice == 2) {
+			return 0, 0, true
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+			return 0, 0, true
+		}
+		overwrite = choice == 0
+		skip = choice == 1
+	}
+	var downloaded, failed int
+	for i, f := range targets {
+		if skip && existing[i] {
+			continue
+		}
+		if err := cl.Download(context.Background(), dir, f.Path, out, overwrite, progressPrinter()); err != nil {
+			fmt.Fprintf(os.Stderr, "失败: %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+		downloaded++
+	}
+	return downloaded, failed, false
+}
+
 func downloadSelection(cl *client.Client, cfg config.ClientConfig, dir string, selected map[string]downloadEntry, files []protocol.FileInfo, excluded map[string]bool) {
 	targets := expandSelection(selected, files, excluded)
 	if len(targets) == 0 {
@@ -1042,14 +1089,11 @@ func downloadSelection(cl *client.Client, cfg config.ClientConfig, dir string, s
 		out = abs
 	}
 	fmt.Printf("保存路径: %s\n", out)
-	var failed int
-	for _, f := range targets {
-		if err := cl.Download(context.Background(), dir, f.Path, out, false, progressPrinter()); err != nil {
-			fmt.Fprintf(os.Stderr, "失败: %s: %v\n", f.Path, err)
-			failed++
-		}
+	downloaded, failed, canceled := downloadTargets(cl, dir, out, targets)
+	if canceled {
+		return
 	}
-	fmt.Printf("下载完成: 成功 %d，失败 %d\n", len(targets)-failed, failed)
+	fmt.Printf("下载完成: 成功 %d，失败 %d\n", downloaded, failed)
 	if failed > 0 {
 		fail(exitPartial, "部分文件下载失败")
 	}
@@ -1204,14 +1248,11 @@ func downloadDir(cl *client.Client, dir, cur string, files []protocol.FileInfo, 
 		out = abs
 	}
 	fmt.Printf("保存路径: %s\n", out)
-	var failed int
-	for _, f := range targets {
-		if err := cl.Download(context.Background(), dir, f.Path, out, false, progressPrinter()); err != nil {
-			fmt.Fprintf(os.Stderr, "失败: %s: %v\n", f.Path, err)
-			failed++
-		}
+	downloaded, failed, canceled := downloadTargets(cl, dir, out, targets)
+	if canceled {
+		return
 	}
-	fmt.Printf("下载完成: 成功 %d，失败 %d\n", len(targets)-failed, failed)
+	fmt.Printf("下载完成: 成功 %d，失败 %d\n", downloaded, failed)
 	if failed > 0 {
 		fail(exitPartial, "部分文件下载失败")
 	}

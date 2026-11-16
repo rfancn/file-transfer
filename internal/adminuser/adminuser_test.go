@@ -3,6 +3,7 @@ package adminuser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,28 @@ func TestLoadOrCreate(t *testing.T) {
 	}
 	if !store2.Verify(DefaultName, password) {
 		t.Fatal("existing password should still pass")
+	}
+}
+
+func TestSaveKeepsSpecialCharactersReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), dirName, fileName)
+	s := &Store{path: path, users: map[string]string{DefaultName: "a&b<c>d"}}
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"a&b<c>d"`) {
+		t.Fatalf("密码中的特殊字符被转义: %s", raw)
+	}
+	loaded, _, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Verify(DefaultName, "a&b<c>d") {
+		t.Fatal("加载后密码校验失败")
 	}
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -589,11 +590,15 @@ func ServiceSecretsPath() string {
 // SaveServiceSecrets 把两组服务身份凭据以 JSON 格式写入 secrets/s3_credentials.json。
 // 文件包含 "ft-data" 和 "ft-admin" 两个对象。
 func SaveServiceSecrets(data, admin Credentials) error {
-	body, err := json.MarshalIndent(serviceSecrets{Data: data, Admin: admin}, "", "  ")
-	if err != nil {
+	var b bytes.Buffer
+	// 关闭 HTML 转义，避免密码中的 & < > 被写成 \uXXXX。
+	enc := json.NewEncoder(&b)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(serviceSecrets{Data: data, Admin: admin}); err != nil {
 		return err
 	}
-	body = append(body, '\n')
+	body := b.Bytes()
 	p := ServiceSecretsPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err

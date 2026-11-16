@@ -10,7 +10,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rfancn/file-transfer/internal/config"
 )
+
+func TestNewAcceptsHTTPAndHTTPS(t *testing.T) {
+	for _, raw := range []string{"http://ft-server:8080", "https://ft-server.example.com"} {
+		c, err := New(config.ClientConfig{Server: config.ClientSection{URL: raw}})
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if c.baseURL != raw {
+			t.Fatalf("baseURL = %q, want %q", c.baseURL, raw)
+		}
+	}
+}
+
+func TestNewRejectsUnsupportedScheme(t *testing.T) {
+	if _, err := New(config.ClientConfig{Server: config.ClientSection{URL: "ftp://ft-server"}}); err == nil {
+		t.Fatal("ftp scheme should be rejected")
+	}
+}
 
 func TestExecuteRetriesTooManyRequests(t *testing.T) {
 	var attempts int

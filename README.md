@@ -3,7 +3,7 @@
 用于在相互隔离的网络之间，按用户、按方向安全交换文件。所有文件集中存放在 RustFS 的 `file-transfer` 桶中：
 
 - 用户使用 `ft-client`（用户端）上传和下载；
-- 需要直连 RustFS 的用户使用 RustFS Console 或 Cyberduck 访问自己有权访问的目录；
+- 工作电脑用户建议使用 Cyberduck 管理自己的文件（见「Cyberduck 配置」），也可使用 RustFS Console，均只能访问自己有权访问的目录；
 - 管理员使用 `ft-admin`（管理客户端）初始化系统、管理用户和清理数据；
 - `ft-server` 部署在 RustFS 同机，统一完成身份认证、目录隔离和文件代理。
 
@@ -30,12 +30,12 @@ file-transfer/
 | 角色 | 使用工具 | 主要职责 |
 |---|---|---|
 | 用户 | `ft-client`（用户端） | 下载 `inbound`/`upload`，上传 `outbound` |
-| 工作电脑用户 | RustFS Console / Cyberduck | 列出、上传自己的 `upload`；不能删除，也不能访问 `inbound`/`outbound` |
+| 工作电脑用户 | RustFS Console / Cyberduck | 列出自己的 `inbound`/`outbound`/`upload`，上传或删除自己 `upload` 下的内容；不能删除 `upload` 目录本身，不能下载或写入 `inbound`/`outbound` |
 | 摆渡操作员 | RustFS Console / Cyberduck（operator 账号） | 向所有用户 `inbound` 放件/删除，从所有用户 `outbound` 取件 |
 | 管理员 | `ft-admin`（管理客户端） | 初始化、创建/删除用户、重置密码、清理数据 |
 | 服务端 | `ft-server` | 认证、目录隔离、文件代理、断点续传、审计 |
 
-普通用户在 Console/Cyberduck 中只能 list/put/delete 自己的 `upload`，不能访问 `inbound`/`outbound`；这两个目录通过 `ft-client` 访问。摆渡操作员可以浏览所有用户的 `inbound` 和 `outbound`，但不能访问 `upload`。
+普通用户在 Console/Cyberduck 中可以列出自己的 `inbound`、`outbound` 和 `upload`，可以上传和删除自己 `upload` 下的内容（`upload` 目录本身不可删）；`inbound`/`outbound` 不可下载、不可写入，也不能删除。摆渡操作员可以浏览所有用户的 `inbound` 和 `outbound`，但不能访问 `upload`。
 
 ## 三类摆渡场景
 
@@ -62,6 +62,7 @@ ft-client download inbound 2026-11-13/report.pdf --output ./inbound
 
 - 普通用户对 `inbound` 只读，不能自行放入文件；外网文件统一由摆渡操作员写入。
 - `inbound` 中的文件不会被自动移到其他目录，下载不会改变远端内容。
+- 下载时如果本地已存在同名文件，会询问覆盖、跳过还是取消。
 - 定时清理可执行 `ft-admin clean inbound --days 3`。
 
 ### 场景二：内网拷出外网（`outbound`）
@@ -93,7 +94,7 @@ ft-client download inbound 2026-11-13/report.pdf --output ./inbound
 
 用于把工作电脑上的文件传输到服务器。
 
-1. 工作电脑用户在 RustFS Console 中使用自己的账号登录。
+1. 工作电脑用户建议使用 Cyberduck（配置见下方「Cyberduck 配置」），也可使用 RustFS Console，用自己的账号登录。
 2. 将文件或目录上传到自己的 `upload/` 下，例如：
    ```text
    zhangsan/upload/project-a/data.zip
@@ -102,7 +103,7 @@ ft-client download inbound 2026-11-13/report.pdf --output ./inbound
 4. 在列表中勾选文件或目录：
    - 空格勾选；
    - 勾选目录会包含其下全部内容，部分选中显示 `[-]`；
-   - 选择「确认下载清单」后显示汇总，再选择保存路径并下载。
+   - 选择「确认下载清单」后显示汇总，再选择保存路径并下载；本地已存在同名文件时可选择覆盖或跳过。
 5. 下载完成后，由管理员按需清理：
 
 ```sh
@@ -119,6 +120,26 @@ ft-client download upload project-a/data.zip --output ./upload
 
 - `upload` 是工作电脑到服务器的单向交付目录，`ft-client` 不能向其中上传。
 - 摆渡操作员不能访问 `upload`；该目录仅文件所属用户、`ft-server` 数据面和 `ft-admin` 管理面可访问。
+
+### Cyberduck 配置
+
+工作电脑建议使用 [Cyberduck](https://cyberduck.io/) 直接管理自己的文件。新建 S3（HTTPS）书签，按以下方式填写：
+
+| 配置项 | 值 |
+|---|---|
+| 连接协议 | S3（HTTPS） |
+| 服务器 | S3 API 域名，例如 `s3.example.internal`（不是 `ft-server` 的业务地址） |
+| 端口 | `443` |
+| Access Key ID | 个人用户名 |
+| Secret Access Key | 个人密码 |
+| 路径 | `file-transfer/<用户名>` |
+
+例如用户 `zhangsan` 的路径为 `file-transfer/zhangsan`。连接后可直接在 `upload/` 下拖拽上传、删除自己的文件；`inbound/`、`outbound/` 只可列出，不能下载、写入或删除。
+
+注意事项：
+
+- 路径必须包含自己的用户名，直接连接 bucket 根目录会被拒绝（用户组没有 `s3:ListAllMyBuckets` 权限）。
+- Cyberduck 直连不经过 `ft-server`，不受应用层限速约束，大文件传输请自行控制并发（见「应用层 I/O 限速」）。
 
 ## 系统组成
 
@@ -159,7 +180,7 @@ ft-client download upload project-a/data.zip --output ./upload
 
 直连 RustFS 的工具：
 
-- 普通用户使用个人账号列出、上传自己的 `upload`；不能删除，也不能访问 `inbound`/`outbound`，这两个目录通过 `ft-client` 访问；
+- 普通用户使用个人账号列出自己的 `inbound`/`outbound`/`upload`，上传或删除自己 `upload` 下的内容（目录本身不可删）；不能下载或写入 `inbound`/`outbound`；
 - 摆渡操作员使用自己的 operator 账号向所有用户 `inbound` 放件/删除、从所有用户 `outbound` 取件。
 
 ## 部署与初始化
@@ -231,7 +252,7 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 
 | 文件 | 用途 |
 |---|---|
-| `user-group.json` | 用户组策略：只允许 `<username>/upload/*` 的 list/put，显式 Deny 删除 |
+| `user-group.json` | 用户组策略：允许列出 `<username>/inbound`、`outbound`、`upload`，允许读写和删除 `<username>/upload/*`；`<username>/upload/.keep` 受 Deny 保护 |
 | `operator-group.json` | 操作员组策略：所有用户 inbound list/put/delete、outbound list/get，无 upload 和 admin 权限 |
 | `server-data.json` | `ft-data` 服务身份策略 |
 | `server-admin.json` | `ft-admin` 服务身份策略 |
@@ -240,14 +261,14 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
 - 策略文件不能包含 `{{...}}` 占位符，加载时会校验。
 - 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
-- 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `<bucket>/<username>/upload` 路径。
+- 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `<bucket>/<username>` 路径。
 - 操作员组不包含任何 `admin:*` 权限，只负责 inbound/outbound 摆渡。
 - `ft-data` 不授予 Delete 权限；`ft-admin clean` 使用 `ft-admin` 服务身份执行删除。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
 - `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。
 - Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
 - 修改策略后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
-- 用户组只能列出自己的 `upload` 前缀；Cyberduck 书签的路径应设置为 `<bucket>/<username>/upload`，直接连接 bucket 根目录可能看不到目录。
+- 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `<bucket>/<username>`，直接连接 bucket 根目录会被拒绝。
 
 ### 3. 初始化 RustFS
 
@@ -263,7 +284,7 @@ ft-admin init
 
 - `ft-data`：代理用户的数据面操作；
 - `ft-admin` 服务身份：`ft-server` 使用的 RustFS 管理面身份，执行用户管理和数据清理（与命令行工具 `ft-admin` 同名，职责不同）；
-- `ft-user-group`：普通用户组，绑定只允许 `upload` list/put 的策略；
+- `ft-user-group`：普通用户组，绑定可列出 `inbound`/`outbound`/`upload`、读写和删除 `upload` 内容的策略；
 - `ft-operator-group`：操作员组，绑定所有用户 `inbound`/`outbound` 的策略。
 
 初始化**不会创建默认操作员账号**。操作员账号通过 `ft-admin user add` 创建时选择操作员组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
@@ -448,17 +469,17 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 | 身份 | `inbound` | `outbound` | `upload` |
 |---|---|---|---|
-| 普通用户（Console/Cyberduck） | 无权限 | 无权限 | 列出、上传自己的目录；删除被 Deny |
+| 普通用户（Console/Cyberduck） | 列出 | 列出 | 列出、上传、删除自己的文件；`upload` 目录本身受保护 |
 | 用户（`ft-client` 用户端） | 列出、读取 | 列出、上传 | 列出、读取 |
 | 操作员（`ft-operator-group`） | 列出、上传、删除所有用户 | 列出、读取所有用户 | 无权限 |
 | 管理员（`ft-admin` 管理客户端） | 管理、删除 | 管理、删除 | 管理、删除 |
 
-普通用户只能列出自己的 `upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `<bucket>/<username>/upload`。
+普通用户只能列出自己的 `inbound`/`outbound`/`upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `file-transfer/<用户名>`（见「Cyberduck 配置」）。
 
 ## 安全边界
 
-- `ft-server` 仅用于可信局域网，使用明文 HTTP；不要将管理端口暴露到不可信网络。
-- 客户端只允许 `http://` 服务端地址，不应跨不可信网络使用。
+- 客户端支持 `http://` 和 `https://` 服务端地址；跨不可信网络时应使用 HTTPS。
+- `ft-server` 的管理端口不应暴露到不可信网络。
 - `ft-server` 不向客户端下发 S3 凭据；所有 RustFS 操作由服务身份代理。
 - `ft-client` 以明文保存账号密码（0600）；不需要自动登录时删除 `~/.file-transfer`。
 - `ft-server` 管理员账号和服务身份凭据保存在 `secrets/`（0600），请严格限制访问。
@@ -480,7 +501,7 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 **工作电脑可以用 `ft-client` 上传到 `upload` 吗？**
 
-不能。`ft-client upload` 只写入 `outbound`。工作电脑传文件到服务器请使用 RustFS Console 或 Cyberduck 上传到 `upload`，再由用户通过 `ft-client` 下载。
+不能。`ft-client upload` 只写入 `outbound`。工作电脑传文件到服务器建议使用 Cyberduck（配置见「Cyberduck 配置」）或 RustFS Console 上传到 `upload/`，再由用户通过 `ft-client` 下载。
 
 **忘记批次号怎么办？**
 
@@ -494,7 +515,7 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 通常是 `s3.endpoint` 或 `s3.region` 不匹配：
 
-- 确认 `s3.endpoint` / `FT_S3_ENDPOINT` 使用 RustFS 的 HTTPS API 地址，例如 `https://s3.sysummit.internal`；不要用 `http://host.docker.internal:9000` 访问只提供 HTTPS 的入口。
+- 确认 `s3.endpoint` / `FT_S3_ENDPOINT` 使用 RustFS 的 HTTPS API 地址，例如 `https://s3.example.internal`；不要用 `http://host.docker.internal:9000` 访问只提供 HTTPS 的入口。
 - 确认 `s3.region` 与 bucket 所在 region 一致；当前部署通常为 `us-east-1`。
 - 如果 `ft-server` 在 Docker 中，确认容器能解析该域名，并信任 RustFS 的证书。
 - 新版本会在错误中带出当前 endpoint、配置 region 和服务端返回的 region。

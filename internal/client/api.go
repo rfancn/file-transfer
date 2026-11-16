@@ -75,8 +75,8 @@ func New(cfg config.ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server.url 无效: %w", err)
 	}
-	if u.Scheme != "http" {
-		return nil, fmt.Errorf("server.url 必须是 http://（客户端与服务端在同一局域网，不使用 HTTPS）")
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("server.url 必须是 http:// 或 https://")
 	}
 	clientUser, clientHost := localClientInfo()
 	return &Client{
