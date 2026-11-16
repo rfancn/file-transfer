@@ -165,14 +165,20 @@ func TestSleepContextCanceled(t *testing.T) {
 func TestRetryNotice(t *testing.T) {
 	var buf bytes.Buffer
 	retryNotice(&buf, 5*time.Second)
-	if got := buf.String(); !strings.Contains(got, "服务器繁忙，等待 5 秒后重试") {
-		t.Fatalf("notice = %q", got)
+	if got, want := buf.String(), "服务器繁忙，等待 5 秒后重试\n"; got != want {
+		t.Fatalf("notice = %q，期望 %q", got, want)
 	}
 
 	buf.Reset()
 	retryNotice(&buf, 0)
-	if got := buf.String(); !strings.Contains(got, "服务器繁忙，正在重试") {
-		t.Fatalf("notice = %q", got)
+	if got, want := buf.String(), "服务器繁忙，正在重试\n"; got != want {
+		t.Fatalf("notice = %q，期望 %q", got, want)
+	}
+
+	buf.Reset()
+	retryNotice(&buf, 300*time.Millisecond)
+	if got, want := buf.String(), "服务器繁忙，等待 1 秒后重试\n"; got != want {
+		t.Fatalf("notice = %q，期望 %q", got, want)
 	}
 
 	retryNotice(nil, time.Second) // 不应 panic
@@ -205,6 +211,9 @@ func TestExecuteShowsRetryNotice(t *testing.T) {
 	defer resp.Body.Close()
 	if !strings.Contains(buf.String(), "服务器繁忙") {
 		t.Fatalf("未输出重试提示: %q", buf.String())
+	}
+	if n := strings.Count(buf.String(), "服务器繁忙"); n != 1 {
+		t.Fatalf("重试提示出现 %d 次，期望 1 次: %q", n, buf.String())
 	}
 }
 

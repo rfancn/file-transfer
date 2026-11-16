@@ -311,7 +311,12 @@ func retryNotice(w io.Writer, wait time.Duration) {
 		return
 	}
 	if wait > 0 {
-		_, _ = fmt.Fprintf(w, "服务器繁忙，等待 %d 秒后重试\n", int64(wait.Round(time.Second)/time.Second))
+		// 向上取整且至少 1 秒，避免亚秒等待显示为 0 秒。
+		secs := int64((wait + time.Second - 1) / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		_, _ = fmt.Fprintf(w, "服务器繁忙，等待 %d 秒后重试\n", secs)
 		return
 	}
 	_, _ = fmt.Fprintln(w, "服务器繁忙，正在重试")
