@@ -118,7 +118,7 @@ func (h *Handler) Download(c *gin.Context) {
 				"username", username,
 				"class", "transfer",
 				"limited_bytes", n,
-				"reason", "context_canceled")
+				"reason", cancelReason(err))
 		} else {
 			logging.Error("download copy", "key", key, "err", err)
 		}
@@ -143,12 +143,12 @@ func (h *Handler) Upload(c *gin.Context) {
 	}
 	defer release()
 	if err := h.Data.Put(c.Request.Context(), key, h.wrapUpload(c, c.Request.Body, username), c.Request.ContentLength); err != nil {
-		if c.Request.Context().Err() != nil {
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
 			logging.Warn("limit stream canceled",
 				"request_id", c.GetString("request_id"),
 				"username", username,
 				"class", "transfer",
-				"reason", "context_canceled")
+				"reason", cancelReason(ctxErr))
 			return
 		}
 		logging.Error("upload", "key", key, "err", err)

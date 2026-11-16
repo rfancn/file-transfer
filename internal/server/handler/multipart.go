@@ -120,12 +120,12 @@ func (h *Handler) MultipartPart(c *gin.Context) {
 	etag, err := h.Data.PutPart(c.Request.Context(), claims.Path, claims.S3UploadID, partNum, h.wrapUpload(c, c.Request.Body, username), c.Request.ContentLength)
 	if err != nil {
 		// 客户端已断开时不再写响应
-		if c.Request.Context().Err() != nil {
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
 			logging.Warn("limit stream canceled",
 				"request_id", c.GetString("request_id"),
 				"username", username,
 				"class", "transfer",
-				"reason", "context_canceled",
+				"reason", cancelReason(ctxErr),
 				"path", rel)
 			return
 		}

@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -36,6 +37,14 @@ func wildcardPath(c *gin.Context) string {
 	return strings.TrimPrefix(c.Param("path"), "/")
 }
 
+// cancelReason 区分超时与主动取消，用于限速日志的 reason 字段。
+func cancelReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline_exceeded"
+	}
+	return "context_canceled"
+}
+
 // acquireTransfer 获取全局和单用户传输槽。返回 false 时调用方不得再写响应：
 // ErrBusy 已写 429，请求取消等错误未写响应。
 func (h *Handler) acquireTransfer(c *gin.Context, username string) (func(), bool) {
@@ -55,12 +64,12 @@ func (h *Handler) acquireTransfer(c *gin.Context, username string) (func(), bool
 				"reason", "queue_timeout")
 			response.ErrBusy(c, h.RT.Limits.QueueTimeout)
 		} else {
-			logging.Info("limit canceled",
+			logging.Warn("limit canceled",
 				"request_id", c.GetString("request_id"),
 				"username", username,
 				"class", "transfer",
 				"wait_ms", waitMs,
-				"reason", "context_canceled")
+				"reason", cancelReason(err))
 		}
 		return nil, false
 	}
@@ -94,12 +103,12 @@ func (h *Handler) acquireMetadata(c *gin.Context) (func(), bool) {
 				"reason", "queue_timeout")
 			response.ErrBusy(c, h.RT.Limits.QueueTimeout)
 		} else {
-			logging.Info("limit canceled",
+			logging.Warn("limit canceled",
 				"request_id", c.GetString("request_id"),
 				"username", username,
 				"class", "metadata",
 				"wait_ms", waitMs,
-				"reason", "context_canceled")
+				"reason", cancelReason(err))
 		}
 		return nil, false
 	}
