@@ -313,12 +313,12 @@ func writeValidPolicies(t *testing.T, dir, skip string) {
 }
 
 func TestIsSystemUser(t *testing.T) {
-	for _, name := range []string{"ft-data", "ft-admin", "ft-operator", "ft-server-data", "ft-server-admin", "ft-copy-out"} {
+	for _, name := range []string{"ft-data", "ft-admin", "ft-server-data", "ft-server-admin", "ft-copy-out"} {
 		if !IsSystemUser(name) {
 			t.Fatalf("%s should be a system user", name)
 		}
 	}
-	for _, name := range []string{"alice", "fanyu", "ft-user-group"} {
+	for _, name := range []string{"alice", "fanyu", "ft-operator", "ft-user-group"} {
 		if IsSystemUser(name) {
 			t.Fatalf("%s should not be a system user", name)
 		}

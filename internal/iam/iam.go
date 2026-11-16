@@ -29,7 +29,8 @@ const (
 	ServerAdmin = "ft-admin"
 	// ServerAdminPol 是管理面服务身份的策略。
 	ServerAdminPol = "ft-admin-policy"
-	// ConsoleAdmin 是文件摆渡系统操作员账号，用于工作网 Console/Cyberduck。
+	// ConsoleAdmin 是旧版本默认操作员账号名，保留用于兼容和 root 凭据探测，
+	// 新版本不再自动创建，也不作为系统用户保护。
 	ConsoleAdmin = "ft-operator"
 )
 
@@ -38,7 +39,6 @@ const (
 var systemUsers = map[string]struct{}{
 	DataUser:          {},
 	ServerAdmin:       {},
-	ConsoleAdmin:      {},
 	"ft-server-data":  {},
 	"ft-server-admin": {},
 	"ft-copy-out":     {},
