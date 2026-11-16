@@ -71,15 +71,19 @@ func (m *Manager) useRegion(region string) error {
 // EnsureBucket 保证桶存在。BucketExists 失败时不影响后续创建尝试；
 // 创建时已存在则视为成功。遇到 region 重定向时按服务端返回的 region 重试。
 func (m *Manager) EnsureBucket(ctx context.Context) error {
-	if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
+	ok, existsErr := m.Client.BucketExists(ctx, m.Bucket)
+	if ok {
 		return nil
+	}
+	if isPermanentRedirect(existsErr) {
+		return m.redirectError(existsErr)
 	}
 	err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: m.region})
 	if err == nil || isBucketAlreadyExists(err) {
 		return nil
 	}
-	resp := minio.ToErrorResponse(err)
-	if resp.Code == "PermanentRedirect" {
+	if isPermanentRedirect(err) {
+		resp := minio.ToErrorResponse(err)
 		if resp.Region != "" && resp.Region != m.region {
 			if rerr := m.useRegion(resp.Region); rerr == nil {
 				if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
@@ -90,14 +94,35 @@ func (m *Manager) EnsureBucket(ctx context.Context) error {
 				}
 			}
 		}
-		scheme := "http"
-		if m.secure {
-			scheme = "https"
-		}
-		return fmt.Errorf("创建桶 %s 返回 PermanentRedirect：请检查 s3.endpoint=%s://%s 是否应使用 https，以及 s3.region=%s 是否与 bucket 所在区域一致（服务端 region=%s）",
-			m.Bucket, scheme, m.host, m.region, resp.Region)
+		return m.redirectError(err)
 	}
 	return err
+}
+
+func isPermanentRedirect(err error) bool {
+	if err == nil {
+		return false
+	}
+	resp := minio.ToErrorResponse(err)
+	if resp.StatusCode == http.StatusMovedPermanently || resp.Code == "PermanentRedirect" {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "permanent redirect") || strings.Contains(low, "status code: 301")
+}
+
+func (m *Manager) redirectError(err error) error {
+	resp := minio.ToErrorResponse(err)
+	scheme := "http"
+	if m.secure {
+		scheme = "https"
+	}
+	hint := fmt.Sprintf("创建桶 %s 返回 PermanentRedirect：请检查 s3.endpoint=%s://%s 是否应使用 https，以及 s3.region=%s 是否与 bucket 所在区域一致",
+		m.Bucket, scheme, m.host, m.region)
+	if resp.Region != "" {
+		hint += fmt.Sprintf("（服务端 region=%s）", resp.Region)
+	}
+	return fmt.Errorf("%s", hint)
 }
 
 func isBucketAlreadyExists(err error) bool {

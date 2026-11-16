@@ -74,3 +74,23 @@ func TestGetRangeIncludesZeroStart(t *testing.T) {
 		}
 	}
 }
+
+func TestPermanentRedirectClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"status code", minio.ErrorResponse{Code: "PermanentRedirect", StatusCode: http.StatusMovedPermanently}},
+		{"error code", minio.ErrorResponse{Code: "PermanentRedirect"}},
+		{"plain text", errors.New("Permanent Redirect")},
+		{"status text", errors.New("status code: 301")},
+	}
+	for _, tc := range cases {
+		if !isPermanentRedirect(tc.err) {
+			t.Fatalf("%s should be classified as permanent redirect", tc.name)
+		}
+	}
+	if isPermanentRedirect(nil) || isPermanentRedirect(errors.New("no such bucket")) {
+		t.Fatal("non-redirect errors must not match")
+	}
+}
