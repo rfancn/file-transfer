@@ -17,7 +17,8 @@
         "s3:GetBucketPolicyStatus",
         "s3:GetBucketVersioning",
         "s3:GetBucketObjectLockConfiguration",
-        "s3:GetBucketTagging"
+        "s3:GetBucketTagging",
+        "s3:ListBucketMultipartUploads"
       ],
       "Effect": "Allow",
       "Resource": [
@@ -29,15 +30,9 @@
         "s3:ListBucket"
       ],
       "Condition": {
-        "StringLikeIfExists": {
+        "StringLike": {
           "s3:prefix": [
-            "",
-            "${aws:username}/",
-            "${aws:username}/*",
-            "${aws:username}/inbound/",
-            "${aws:username}/inbound/*",
-            "${aws:username}/outbound/",
-            "${aws:username}/outbound/*",
+            "${aws:username}/upload",
             "${aws:username}/upload/",
             "${aws:username}/upload/*"
           ]
@@ -46,6 +41,21 @@
       "Effect": "Allow",
       "Resource": [
         "arn:aws:s3:::{{bucket}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:DeleteObjectTagging",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts",
+        "s3:PutObjectTagging"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{bucket}}/${aws:username}/upload/*"
       ]
     }
   ],

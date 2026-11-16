@@ -19,13 +19,8 @@ func loadTestPolicies(t *testing.T) *Policies {
 
 func TestPoliciesValidJSON(t *testing.T) {
 	p := loadTestPolicies(t)
-	userPolicy, err := p.UserPolicy("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
 	pols := map[string][]byte{
 		"group":        p.Group,
-		"user":         userPolicy,
 		"operator":     p.Operator,
 		"server-data":  p.Data,
 		"server-admin": p.Admin,
@@ -41,35 +36,69 @@ func TestPoliciesValidJSON(t *testing.T) {
 	}
 }
 
-func TestUserPolicyCannotDeleteUpload(t *testing.T) {
+func TestUserGroupPolicyUploadOnly(t *testing.T) {
 	p := loadTestPolicies(t)
-	raw, err := p.UserPolicy("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "s3:DeleteObject") {
-		t.Fatalf("user policy must not allow deleting upload objects: %s", raw)
-	}
-}
-
-func TestUserTemplateRenders(t *testing.T) {
-	p := loadTestPolicies(t)
-	raw, err := p.UserPolicy("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(raw)
-	for _, want := range []string{
-		"alice/inbound/", "alice/outbound/", "alice/upload/",
-		"arn:aws:s3:::file-transfer/alice/inbound/*",
-		"arn:aws:s3:::file-transfer/alice/upload/*",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("rendered user policy missing %q: %s", want, text)
+	var doc struct {
+		Statement []struct {
+			Effect   string
+			Action   []string
+			Resource []string
 		}
 	}
-	if strings.Contains(text, "{{") {
-		t.Fatalf("rendered user policy still contains placeholders: %s", text)
+	if err := json.Unmarshal(p.Group, &doc); err != nil {
+		t.Fatal(err)
+	}
+	uploadActions := map[string]bool{
+		"s3:PutObject":                true,
+		"s3:DeleteObject":             true,
+		"s3:DeleteObjectVersion":      true,
+		"s3:DeleteObjectTagging":      true,
+		"s3:AbortMultipartUpload":     true,
+		"s3:ListMultipartUploadParts": true,
+		"s3:PutObjectTagging":         true,
+	}
+	seen := map[string]bool{}
+	for _, st := range doc.Statement {
+		for _, action := range st.Action {
+			if action == "s3:GetObject" {
+				t.Fatal("user group must not allow downloading objects")
+			}
+			if !uploadActions[action] {
+				continue
+			}
+			seen[action] = true
+			for _, res := range st.Resource {
+				if res != "arn:aws:s3:::file-transfer/${aws:username}/upload/*" {
+					t.Fatalf("%s resource outside upload: %s", action, res)
+				}
+			}
+		}
+		for _, res := range st.Resource {
+			if strings.Contains(res, "/inbound/") || strings.Contains(res, "/outbound/") {
+				t.Fatalf("user group must not grant inbound/outbound access: %s", res)
+			}
+		}
+	}
+	for action := range uploadActions {
+		if !seen[action] {
+			t.Fatalf("user group missing upload action %s", action)
+		}
+	}
+	text := string(p.Group)
+	for _, want := range []string{
+		"${aws:username}/upload",
+		"${aws:username}/upload/",
+		"${aws:username}/upload/*",
+		"s3:ListBucketMultipartUploads",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("user group missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"${aws:username}/inbound", "${aws:username}/outbound"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("user group must not mention %q", forbidden)
+		}
 	}
 }
 
@@ -223,34 +252,6 @@ func TestLoadPoliciesUnknownPlaceholder(t *testing.T) {
 	}
 }
 
-func TestLoadPoliciesRequiresUserPlaceholder(t *testing.T) {
-	dir := t.TempDir()
-	writeValidPolicies(t, dir, "")
-	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/*"]}]}`
-	if err := os.WriteFile(filepath.Join(dir, policyUserTemplate), []byte(bad), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadPolicies(dir, "bucket"); err == nil || !strings.Contains(err.Error(), placeholderUser) {
-		t.Fatalf("期望缺少 %s 的错误，得到 %v", placeholderUser, err)
-	}
-}
-
-func TestLoadPoliciesEmptyDir(t *testing.T) {
-	if _, err := LoadPolicies(t.TempDir(), "bucket"); err == nil {
-		t.Fatal("空目录应返回错误")
-	}
-}
-
-func TestUserPolicyRequiresUser(t *testing.T) {
-	p := loadTestPolicies(t)
-	if _, err := p.UserPolicy(""); err == nil {
-		t.Fatal("空用户名应返回错误")
-	}
-	if _, err := p.UserPolicy("bad name"); err == nil {
-		t.Fatal("非法用户名应返回错误")
-	}
-}
-
 func TestLoadPoliciesResidualBrace(t *testing.T) {
 	dir := t.TempDir()
 	writeValidPolicies(t, dir, "")
@@ -263,13 +264,17 @@ func TestLoadPoliciesResidualBrace(t *testing.T) {
 	}
 }
 
+func TestLoadPoliciesEmptyDir(t *testing.T) {
+	if _, err := LoadPolicies(t.TempDir(), "bucket"); err == nil {
+		t.Fatal("空目录应返回错误")
+	}
+}
+
 func writeValidPolicies(t *testing.T, dir, skip string) {
 	t.Helper()
 	plain := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/*"]}]}`
-	template := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/{{user}}/*"]}]}`
 	files := map[string]string{
 		policyUserGroupFile:  plain,
-		policyUserTemplate:   template,
 		policyOperatorFile:   plain,
 		policyServerDataFile: plain,
 		policyServerAdmin:    plain,

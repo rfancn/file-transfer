@@ -299,14 +299,6 @@ func (m *Manager) SetupUser(ctx context.Context, user, password string) (bool, e
 			return false, err
 		}
 	}
-	polName := UserPolicyName(user)
-	userPolicy, err := m.Policies.UserPolicy(user)
-	if err != nil {
-		return !exists, err
-	}
-	if err := m.ReplacePolicy(ctx, polName, userPolicy, []string{user}, nil); err != nil {
-		return !exists, err
-	}
 	if err := m.AddToGroup(ctx, UserGroup, user); err != nil {
 		return !exists, err
 	}

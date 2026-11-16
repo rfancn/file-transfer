@@ -30,12 +30,12 @@ file-transfer/
 | 角色 | 使用工具 | 主要职责 |
 |---|---|---|
 | 用户 | `ft-client`（用户端） | 下载 `inbound`/`upload`，上传 `outbound` |
-| 工作电脑用户 | RustFS Console / Cyberduck | 上传 `upload`，查看自己的 `inbound` |
+| 工作电脑用户 | RustFS Console / Cyberduck | 列出、上传、删除自己的 `upload`；不能访问 `inbound`/`outbound` |
 | 摆渡操作员 | RustFS Console / Cyberduck（`ft-operator`） | 向所有用户 `inbound` 放件，从所有用户 `outbound` 取件 |
 | 管理员 | `ft-admin`（管理客户端） | 初始化、创建/删除用户、重置密码、清理数据 |
 | 服务端 | `ft-server` | 认证、目录隔离、文件代理、断点续传、审计 |
 
-普通用户在 Console 中只能读取自己的目录内容，但可能看到其他用户的顶层目录名；摆渡操作员可以浏览所有用户的 `inbound` 和 `outbound`，但不能访问 `upload`。
+普通用户在 Console/Cyberduck 中只能 list/put/delete 自己的 `upload`，不能访问 `inbound`/`outbound`；这两个目录通过 `ft-client` 访问。摆渡操作员可以浏览所有用户的 `inbound` 和 `outbound`，但不能访问 `upload`。
 
 ## 三类摆渡场景
 
@@ -159,7 +159,7 @@ ft-client download upload project-a/data.zip --output ./upload
 
 直连 RustFS 的工具：
 
-- 普通用户使用个人账号上传 `upload`、读取自己的 `inbound`；
+- 普通用户使用个人账号列出、上传、删除自己的 `upload`；`inbound`/`outbound` 通过 `ft-client` 访问；
 - 摆渡操作员使用 `ft-operator` 向所有用户 `inbound` 放件、从所有用户 `outbound` 取件。
 
 ## 部署与初始化
@@ -231,18 +231,18 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 
 | 文件 | 用途 |
 |---|---|
-| `user-group.json` | 用户组策略 |
-| `user-template.json` | 每用户策略模板，使用 `{{user}}` 占位符 |
+| `user-group.json` | 用户组策略：只允许 `<username>/upload/*` 的 list/put/delete |
 | `operator-group.json` | 操作员组策略 |
 | `server-data.json` | `ft-data` 服务身份策略 |
 | `server-admin.json` | `ft-admin` 服务身份策略 |
 
-- `{{bucket}}` 由 `ft-server` 启动时替换；`{{user}}` 只在 `user-template.json` 中，创建用户时替换。
+- `{{bucket}}` 由 `ft-server` 启动时替换；`${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
+- 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
 - `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。
 - Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
-- 修改 `user-group.json`、`operator-group.json`、`server-data.json`、`server-admin.json` 后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
-- `user-template.json` 只影响之后创建的用户；已有用户需要重新创建或通过后续工具重建策略。
+- 修改策略后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
+- 用户组只能列出自己的 `upload` 前缀；Cyberduck 书签的路径应设置为 `<bucket>/<username>/upload`，直接连接 bucket 根目录可能看不到目录。
 
 ### 3. 初始化 RustFS
 
@@ -440,12 +440,12 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 | 身份 | `inbound` | `outbound` | `upload` |
 |---|---|---|---|
-| 普通用户（Console/Cyberduck） | 列出、读取自己的目录 | 仅列出自己的目录 | 列出、读取、上传自己的目录 |
+| 普通用户（Console/Cyberduck） | 无权限 | 无权限 | 列出、上传、删除自己的目录 |
 | 用户（`ft-client` 用户端） | 列出、读取 | 列出、上传 | 列出、读取 |
 | 摆渡操作员（`ft-operator`） | 列出、上传、删除所有用户 | 列出、读取所有用户 | 无权限 |
 | 管理员（`ft-admin` 管理客户端） | 管理、删除 | 管理、删除 | 管理、删除 |
 
-普通用户无法在 S3 层把桶根目录列表过滤为只显示自己的目录，因此 Console 中可能看到其他用户的顶层目录名，但无法读取其内容。
+普通用户只能列出自己的 `upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `<bucket>/<username>/upload`。
 
 ## 安全边界
 
