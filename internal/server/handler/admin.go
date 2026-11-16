@@ -63,9 +63,6 @@ func (h *Handler) AdminInit(c *gin.Context) {
 		response.Err(c, http.StatusInternalServerError, "internal_error", "写入配置失败")
 		return
 	}
-	if res.ConsoleCreated {
-		logging.Info("文件摆渡系统操作员已创建", "username", iam.ConsoleAdmin, "password", res.ConsolePassword)
-	}
 	if res.DataPasswordReset {
 		logging.Warn("服务身份密码缺失，已重置并写入 secrets/s3_credentials.json", "username", iam.DataUser, "path", config.ServiceSecretsPath())
 	}
@@ -89,9 +86,7 @@ func (h *Handler) AdminInit(c *gin.Context) {
 // AdminAddUser 由 ft-server 用服务身份创建用户。
 func (h *Handler) AdminAddUser(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
-	var req struct {
-		Username string `json:"username"`
-	}
+	var req protocol.AddUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_request", "请求参数错误")
 		return
@@ -99,6 +94,18 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 	username := strings.TrimSpace(req.Username)
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
+		return
+	}
+	group := strings.TrimSpace(req.Group)
+	if group == "" {
+		group = iam.UserGroup
+	}
+	if group != iam.UserGroup && group != iam.AdminGroup {
+		response.Err(c, http.StatusBadRequest, "invalid_group", "组只允许 ft-user-group 或 ft-operator-group")
+		return
+	}
+	if group == iam.AdminGroup && !req.ConfirmOperator {
+		response.Err(c, http.StatusBadRequest, "operator_confirm_required", "创建操作员需要二次确认")
 		return
 	}
 	exists, err := h.IAM.UserExists(c.Request.Context(), username)
@@ -116,18 +123,30 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 		response.Err(c, http.StatusInternalServerError, "internal_error", "生成密码失败")
 		return
 	}
-	created, err := h.IAM.SetupUser(c.Request.Context(), username, password)
+	created, err := h.IAM.SetupUser(c.Request.Context(), username, password, group)
 	if err != nil {
 		if created {
 			_, _, _ = h.IAM.DeleteUser(c.Request.Context(), username)
 		}
-		logging.Error("admin add user SetupUser", "username", username, "err", err)
+		logging.Error("admin add user SetupUser", "username", username, "group", group, "err", err)
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "创建用户失败")
 		return
 	}
 	if !created {
 		response.Err(c, http.StatusConflict, "already_exists", "用户已存在")
 		return
+	}
+	if group == iam.AdminGroup {
+		logging.Warn("已创建操作员用户", "username", username, "group", group)
+		logging.Audit(logging.AuditEvent{
+			Action:    "admin.user.add.operator",
+			Actor:     c.GetString("admin"),
+			ActorType: "admin",
+			Target:    username,
+			Result:    "success",
+			RequestID: c.GetString("request_id"),
+			RemoteIP:  c.ClientIP(),
+		})
 	}
 	response.JSON(c, http.StatusCreated, protocol.AddUserResponse{Username: username, Password: password})
 }

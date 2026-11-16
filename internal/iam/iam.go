@@ -286,9 +286,15 @@ func (m *Manager) DirExists(ctx context.Context, user, dir string) (bool, error)
 	return m.S3.PrefixExists(ctx, user+"/"+dir+"/")
 }
 
-func (m *Manager) SetupUser(ctx context.Context, user, password string) (bool, error) {
+func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (bool, error) {
 	if m.Policies == nil {
 		return false, errors.New("IAM 策略未加载")
+	}
+	if group == "" {
+		group = UserGroup
+	}
+	if group != UserGroup && group != AdminGroup {
+		return false, fmt.Errorf("不支持的组: %s", group)
 	}
 	exists, err := m.UserExists(ctx, user)
 	if err != nil {
@@ -299,8 +305,14 @@ func (m *Manager) SetupUser(ctx context.Context, user, password string) (bool, e
 			return false, err
 		}
 	}
-	if err := m.AddToGroup(ctx, UserGroup, user); err != nil {
+	if err := m.AddToGroup(ctx, group, user); err != nil {
 		return !exists, err
+	}
+	if group == AdminGroup {
+		if err := m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, nil, []string{AdminGroup}); err != nil {
+			return !exists, err
+		}
+		return !exists, nil
 	}
 	if err := m.ReplacePolicy(ctx, UserGroupPol, m.Policies.Group, nil, []string{UserGroup}); err != nil {
 		return !exists, err
@@ -319,20 +331,21 @@ func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error
 		}
 		return false, 0, err
 	}
-	pol := info.PolicyName
-	if pol == "" {
-		pol = UserPolicyName(user)
+	// 先清理数据；失败时保留用户，避免同名重建后继承旧数据。
+	n, err := m.S3.RemovePrefix(ctx, user+"/")
+	if err != nil {
+		return false, n, fmt.Errorf("清理用户数据 %s: %w", user, err)
 	}
-	_ = m.Detach(ctx, pol, user, "")
+	oldPolicy := UserPolicyName(user)
+	_ = m.Detach(ctx, oldPolicy, user, "")
 	for _, g := range info.MemberOf {
 		_ = m.RemoveFromGroup(ctx, g, user)
 	}
 	if err := m.Admin.RemoveUser(ctx, user); err != nil {
-		return true, 0, err
+		return true, n, err
 	}
-	_ = m.Admin.RemoveCannedPolicy(ctx, pol)
-	n, err := m.S3.RemovePrefix(ctx, user+"/")
-	return true, n, err
+	_ = m.Admin.RemoveCannedPolicy(ctx, oldPolicy)
+	return true, n, nil
 }
 
 func (m *Manager) EnsureServiceIdentities(ctx context.Context, dataUser, dataPass, adminUser, adminPass string) error {
@@ -354,24 +367,29 @@ func (m *Manager) EnsureServiceIdentities(ctx context.Context, dataUser, dataPas
 	return nil
 }
 
-func (m *Manager) EnsureAdminConsole(ctx context.Context, password string) (bool, error) {
-	if m.Policies == nil {
-		return false, errors.New("IAM 策略未加载")
-	}
-	exists, err := m.UserExists(ctx, ConsoleAdmin)
+// EnsureGroup 保证组存在。RustFS 允许通过空的成员列表创建空组。
+func (m *Manager) EnsureGroup(ctx context.Context, group string) error {
+	exists, err := m.GroupExists(ctx, group)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if !exists {
-		if err := m.Admin.AddUser(ctx, ConsoleAdmin, password); err != nil {
-			return false, err
-		}
+	if exists {
+		return nil
 	}
-	_ = m.AddToGroup(ctx, AdminGroup, ConsoleAdmin)
-	if err := m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, []string{ConsoleAdmin}, []string{AdminGroup}); err != nil {
-		return false, err
+	return m.Admin.UpdateGroupMembers(ctx, madmin.GroupAddRemove{
+		Group: group, Members: []string{}, Status: madmin.GroupEnabled,
+	})
+}
+
+// EnsureOperatorGroup 创建操作员组并绑定 operator 策略，不创建默认操作员用户。
+func (m *Manager) EnsureOperatorGroup(ctx context.Context) error {
+	if m.Policies == nil {
+		return errors.New("IAM 策略未加载")
 	}
-	return !exists, nil
+	if err := m.EnsureGroup(ctx, AdminGroup); err != nil {
+		return err
+	}
+	return m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, nil, []string{AdminGroup})
 }
 
 func (m *Manager) ListUsers(ctx context.Context) (map[string]madmin.UserInfo, error) {

@@ -30,8 +30,8 @@ file-transfer/
 | 角色 | 使用工具 | 主要职责 |
 |---|---|---|
 | 用户 | `ft-client`（用户端） | 下载 `inbound`/`upload`，上传 `outbound` |
-| 工作电脑用户 | RustFS Console / Cyberduck | 列出、上传、删除自己的 `upload`；不能访问 `inbound`/`outbound` |
-| 摆渡操作员 | RustFS Console / Cyberduck（`ft-operator`） | 向所有用户 `inbound` 放件，从所有用户 `outbound` 取件 |
+| 工作电脑用户 | RustFS Console / Cyberduck | 列出、上传自己的 `upload`；不能删除，也不能访问 `inbound`/`outbound` |
+| 摆渡操作员 | RustFS Console / Cyberduck（operator 账号） | 向所有用户 `inbound` 放件/删除，从所有用户 `outbound` 取件 |
 | 管理员 | `ft-admin`（管理客户端） | 初始化、创建/删除用户、重置密码、清理数据 |
 | 服务端 | `ft-server` | 认证、目录隔离、文件代理、断点续传、审计 |
 
@@ -43,7 +43,7 @@ file-transfer/
 
 用于把外网文件交付给用户。
 
-1. 摆渡操作员使用 `ft-operator` 账号登录 RustFS Console。
+1. 摆渡操作员使用自己的 operator 账号（加入 `ft-operator-group`）登录 RustFS Console。
 2. 将文件上传到目标用户的 `inbound/` 下，按带日期信息的批次号建立子目录，例如：
    ```text
    zhangsan/inbound/2026111301/report.pdf
@@ -159,8 +159,8 @@ ft-client download upload project-a/data.zip --output ./upload
 
 直连 RustFS 的工具：
 
-- 普通用户使用个人账号列出、上传、删除自己的 `upload`；`inbound`/`outbound` 通过 `ft-client` 访问；
-- 摆渡操作员使用 `ft-operator` 向所有用户 `inbound` 放件、从所有用户 `outbound` 取件。
+- 普通用户使用个人账号列出、上传自己的 `upload`；不能删除，也不能访问 `inbound`/`outbound`，这两个目录通过 `ft-client` 访问；
+- 摆渡操作员使用自己的 operator 账号向所有用户 `inbound` 放件/删除、从所有用户 `outbound` 取件。
 
 ## 部署与初始化
 
@@ -231,8 +231,8 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 
 | 文件 | 用途 |
 |---|---|
-| `user-group.json` | 用户组策略：只允许 `<username>/upload/*` 的 list/put/delete |
-| `operator-group.json` | 操作员组策略 |
+| `user-group.json` | 用户组策略：只允许 `<username>/upload/*` 的 list/put，显式 Deny 删除 |
+| `operator-group.json` | 操作员组策略：所有用户 inbound list/put/delete、outbound list/get，无 upload 和 admin 权限 |
 | `server-data.json` | `ft-data` 服务身份策略 |
 | `server-admin.json` | `ft-admin` 服务身份策略 |
 
@@ -240,6 +240,9 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
 - 策略文件不能包含 `{{...}}` 占位符，加载时会校验。
 - 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
+- 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `<bucket>/<username>/upload` 路径。
+- 操作员组不包含任何 `admin:*` 权限，只负责 inbound/outbound 摆渡。
+- `ft-data` 不授予 Delete 权限；`ft-admin clean` 使用 `ft-admin` 服务身份执行删除。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
 - `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。
 - Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
@@ -256,25 +259,28 @@ ft-admin init
 
 执行需要RustFS root Access Key / Secret Key（也可用 `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` 提供），root 凭据只在内存中使用。
 
-初始化会创建桶、策略以及三个服务身份：
+初始化会创建桶、策略、用户组和操作员组：
 
 - `ft-data`：代理用户的数据面操作；
 - `ft-admin` 服务身份：`ft-server` 使用的 RustFS 管理面身份，执行用户管理和数据清理（与命令行工具 `ft-admin` 同名，职责不同）；
-- `ft-operator`：摆渡操作员，用于 `inbound` / `outbound` 摆渡。
+- `ft-user-group`：普通用户组，绑定只允许 `upload` list/put 的策略；
+- `ft-operator-group`：操作员组，绑定所有用户 `inbound`/`outbound` 的策略。
 
-`ft-operator` 的 8 位密码只输出到 `ft-server` 日志一次。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
+初始化**不会创建默认操作员账号**。操作员账号通过 `ft-admin user add` 创建，默认加入普通用户组；选择操作员组时需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
 
 ### 4. 创建用户
 
 两种方式：
 
 ```sh
-# 管理员创建，返回一次性密码
+# 管理员创建，组通过菜单选择，默认普通用户组，返回一次性密码
 ft-admin user add zhangsan
 
 # 或由用户在内网自行注册
 ft-client register
 ```
+
+交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 操作员组。选择操作员组会显示高权限警告并要求二次确认；非交互创建操作员需要 `--group operator --yes`。
 
 注册用户名请使用本人姓名全拼，只能包含字母、数字、下划线和连字符；密码至少 8 位，需包含大写字母、小写字母、数字和特殊字符。
 
@@ -354,7 +360,7 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 | 命令 | 说明 |
 |---|---|
 | `ft-admin init` | 初始化 RustFS 桶、策略和系统身份 |
-| `ft-admin user add <username>` | 添加用户，输出一次性密码 |
+| `ft-admin user add <username> [--group user\|operator] [--yes]` | 添加用户，组通过菜单选择，默认普通用户组；操作员组需二次确认 |
 | `ft-admin user del <username> [--yes]` | 删除用户及其全部数据 |
 | `ft-admin user reset <username>` | 重置用户密码，输出一次性新密码 |
 | `ft-admin user list` | 列出用户、类型、状态、策略和组 |
@@ -442,9 +448,9 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 | 身份 | `inbound` | `outbound` | `upload` |
 |---|---|---|---|
-| 普通用户（Console/Cyberduck） | 无权限 | 无权限 | 列出、上传、删除自己的目录 |
+| 普通用户（Console/Cyberduck） | 无权限 | 无权限 | 列出、上传自己的目录；删除被 Deny |
 | 用户（`ft-client` 用户端） | 列出、读取 | 列出、上传 | 列出、读取 |
-| 摆渡操作员（`ft-operator`） | 列出、上传、删除所有用户 | 列出、读取所有用户 | 无权限 |
+| 操作员（`ft-operator-group`） | 列出、上传、删除所有用户 | 列出、读取所有用户 | 无权限 |
 | 管理员（`ft-admin` 管理客户端） | 管理、删除 | 管理、删除 | 管理、删除 |
 
 普通用户只能列出自己的 `upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `<bucket>/<username>/upload`。
@@ -457,14 +463,16 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 - `ft-client` 以明文保存账号密码（0600）；不需要自动登录时删除 `~/.file-transfer`。
 - `ft-server` 管理员账号和服务身份凭据保存在 `secrets/`（0600），请严格限制访问。
 - RustFS root 凭据只在初始化期间于内存中使用，不写入磁盘。
-- `ft-operator` 可以删除所有用户 `inbound` 下的对象（`inbound/.keep` 除外），请谨慎授权。
+- `ft-operator-group` 成员可以读取所有用户 `outbound`、删除所有用户 `inbound` 对象（`inbound/.keep` 除外），是高权限角色；创建操作员账号时 `ft-admin` 会要求二次确认，服务端也会校验 `confirm_operator` 并记录审计日志。
+- 操作员策略不包含任何 `admin:*` 权限，不能管理 IAM 用户或策略。
+- 初始化不创建默认操作员账号；操作员必须显式创建并加入 `ft-operator-group`。
 - 生产环境请替换配置中的全部默认密钥和口令。
 
 ## 常见问题
 
 **外网用户为什么不能直接上传到 `inbound`？**
 
-`inbound` 由 `ft-operator` 统一写入，普通用户只读，避免外网账号直接向内部目录放件。外网文件先交给摆渡操作员，再进入目标用户的 `inbound`。
+`inbound` 由操作员组账号统一写入，普通用户只读，避免外网账号直接向内部目录放件。外网文件先交给摆渡操作员，再进入目标用户的 `inbound`。
 
 **用户上传后为什么找不到文件？**
 

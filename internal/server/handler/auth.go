@@ -51,7 +51,7 @@ func (h *Handler) Register(c *gin.Context) {
 		response.Err(c, http.StatusBadRequest, "invalid_password", err.Error())
 		return
 	}
-	created, err := h.IAM.SetupUser(c.Request.Context(), username, password)
+	created, err := h.IAM.SetupUser(c.Request.Context(), username, password, iam.UserGroup)
 	if err != nil {
 		if created {
 			_, _, _ = h.IAM.DeleteUser(c.Request.Context(), username)

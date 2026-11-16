@@ -117,9 +117,13 @@ func (c *Client) DeleteUser(ctx context.Context, username string) (int, error) {
 }
 
 // AddUser 请求 ft-server 创建用户并返回一次性密码。
-func (c *Client) AddUser(ctx context.Context, username string) (protocol.AddUserResponse, error) {
+func (c *Client) AddUser(ctx context.Context, username, group string, confirmOperator bool) (protocol.AddUserResponse, error) {
 	var out protocol.AddUserResponse
-	payload, err := json.Marshal(map[string]string{"username": username})
+	payload, err := json.Marshal(protocol.AddUserRequest{
+		Username:        username,
+		Group:           group,
+		ConfirmOperator: confirmOperator,
+	})
 	if err != nil {
 		return out, err
 	}

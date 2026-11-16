@@ -48,28 +48,39 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 	if err := json.Unmarshal(p.Group, &doc); err != nil {
 		t.Fatal(err)
 	}
-	uploadActions := map[string]bool{
+	allowActions := map[string]bool{
 		"s3:PutObject":                true,
-		"s3:DeleteObject":             true,
-		"s3:DeleteObjectVersion":      true,
-		"s3:DeleteObjectTagging":      true,
 		"s3:AbortMultipartUpload":     true,
 		"s3:ListMultipartUploadParts": true,
 		"s3:PutObjectTagging":         true,
 	}
-	seen := map[string]bool{}
+	denyActions := map[string]bool{
+		"s3:DeleteObject":        true,
+		"s3:DeleteObjectVersion": true,
+		"s3:DeleteObjectTagging": true,
+	}
+	seenAllow := map[string]bool{}
+	seenDeny := map[string]bool{}
+	uploadResource := "arn:aws:s3:::file-transfer/${aws:username}/upload/*"
 	for _, st := range doc.Statement {
 		for _, action := range st.Action {
-			if action == "s3:GetObject" {
-				t.Fatal("user group must not allow downloading objects")
+			if action == "s3:GetObject" || action == "s3:ListAllMyBuckets" || action == "s3:ListBucketMultipartUploads" {
+				t.Fatalf("user group must not grant %s", action)
 			}
-			if !uploadActions[action] {
-				continue
+			if allowActions[action] {
+				seenAllow[action] = true
 			}
-			seen[action] = true
-			for _, res := range st.Resource {
-				if res != "arn:aws:s3:::file-transfer/${aws:username}/upload/*" {
-					t.Fatalf("%s resource outside upload: %s", action, res)
+			if denyActions[action] {
+				if st.Effect != "Deny" {
+					t.Fatalf("%s must be denied, got effect %s", action, st.Effect)
+				}
+				seenDeny[action] = true
+			}
+			if allowActions[action] || denyActions[action] {
+				for _, res := range st.Resource {
+					if res != uploadResource {
+						t.Fatalf("%s resource outside upload: %s", action, res)
+					}
 				}
 			}
 		}
@@ -79,9 +90,14 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 			}
 		}
 	}
-	for action := range uploadActions {
-		if !seen[action] {
+	for action := range allowActions {
+		if !seenAllow[action] {
 			t.Fatalf("user group missing upload action %s", action)
+		}
+	}
+	for action := range denyActions {
+		if !seenDeny[action] {
+			t.Fatalf("user group missing deny action %s", action)
 		}
 	}
 	text := string(p.Group)
@@ -89,7 +105,7 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 		"${aws:username}/upload",
 		"${aws:username}/upload/",
 		"${aws:username}/upload/*",
-		"s3:ListBucketMultipartUploads",
+		`"Deny"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("user group missing %q", want)
@@ -99,6 +115,13 @@ func TestUserGroupPolicyUploadOnly(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("user group must not mention %q", forbidden)
 		}
+	}
+}
+
+func TestOperatorPolicyHasNoAdminActions(t *testing.T) {
+	p := loadTestPolicies(t)
+	if strings.Contains(string(p.Operator), "admin:") {
+		t.Fatal("operator policy must not contain admin actions")
 	}
 }
 

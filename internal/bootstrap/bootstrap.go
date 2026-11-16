@@ -13,14 +13,10 @@ import (
 const (
 	// 服务身份密码长度。
 	servicePasswordLen = 24
-	// 文件摆渡系统操作员密码长度。
-	operatorPasswordLen = 8
 )
 
 // Result 描述本次引导产生的结果。
 type Result struct {
-	ConsoleCreated     bool
-	ConsolePassword    string
 	ConfigChanged      bool
 	DataPasswordReset  bool
 	AdminPasswordReset bool
@@ -104,31 +100,14 @@ func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, a
 	if err := mgr.EnsureServiceIdentities(ctx, iam.DataUser, dataCreds.SecretKey, iam.ServerAdmin, adminCreds.SecretKey); err != nil {
 		return res, fmt.Errorf("初始化服务身份: %w", err)
 	}
-	// 全新环境中还没有用户，ft-user-group 尚不存在，此时只能创建策略；
-	// 首个用户注册时 SetupUser 会先 AddToGroup 再挂组策略。
-	var userGroups []string
-	groupExists, err := mgr.GroupExists(ctx, iam.UserGroup)
-	if err != nil {
-		return res, fmt.Errorf("检查用户组 %s: %w", iam.UserGroup, err)
+	if err := mgr.EnsureGroup(ctx, iam.UserGroup); err != nil {
+		return res, fmt.Errorf("创建用户组 %s: %w", iam.UserGroup, err)
 	}
-	if groupExists {
-		userGroups = []string{iam.UserGroup}
-	}
-	if err := mgr.ReplacePolicy(ctx, iam.UserGroupPol, policies.Group, nil, userGroups); err != nil {
+	if err := mgr.ReplacePolicy(ctx, iam.UserGroupPol, policies.Group, nil, []string{iam.UserGroup}); err != nil {
 		return res, fmt.Errorf("更新用户组策略: %w", err)
 	}
-
-	consolePass, err := auth.GeneratePassword(operatorPasswordLen)
-	if err != nil {
-		return res, fmt.Errorf("生成文件摆渡系统操作员密码: %w", err)
-	}
-	created, err := mgr.EnsureAdminConsole(ctx, consolePass)
-	if err != nil {
-		return res, fmt.Errorf("初始化文件摆渡系统操作员: %w", err)
-	}
-	res.ConsoleCreated = created
-	if created {
-		res.ConsolePassword = consolePass
+	if err := mgr.EnsureOperatorGroup(ctx); err != nil {
+		return res, fmt.Errorf("初始化操作员组: %w", err)
 	}
 
 	if err := config.SaveServiceSecrets(dataCreds, adminCreds); err != nil {

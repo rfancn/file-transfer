@@ -140,22 +140,6 @@
       "Resource": [
         "arn:aws:s3:::file-transfer/*/outbound/*"
       ]
-    },
-    {
-      "Action": [
-        "admin:CreateUser",
-        "admin:AddUserToGroup",
-        "admin:GetUser",
-        "admin:GetGroup",
-        "admin:ListUsers",
-        "admin:ListGroups",
-        "admin:AttachUserOrGroupPolicy",
-        "admin:ListUserPolicies"
-      ],
-      "Effect": "Allow",
-      "Resource": [
-        "arn:aws:s3:::*"
-      ]
     }
   ],
   "Version": "2012-10-17"
