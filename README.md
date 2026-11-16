@@ -266,21 +266,21 @@ ft-admin init
 - `ft-user-group`：普通用户组，绑定只允许 `upload` list/put 的策略；
 - `ft-operator-group`：操作员组，绑定所有用户 `inbound`/`outbound` 的策略。
 
-初始化**不会创建默认操作员账号**。操作员账号通过 `ft-admin user add` 创建，默认加入普通用户组；选择操作员组时需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
+初始化**不会创建默认操作员账号**。操作员账号通过 `ft-admin user add` 创建时选择操作员组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
 
 ### 4. 创建用户
 
 两种方式：
 
 ```sh
-# 管理员创建，组通过菜单选择，默认普通用户组，返回一次性密码
+# 管理员创建，组通过菜单选择，返回一次性密码
 ft-admin user add zhangsan
 
 # 或由用户在内网自行注册
 ft-client register
 ```
 
-交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 操作员组。选择操作员组会显示高权限警告并要求二次确认；非交互创建操作员需要 `--group operator --yes`。
+交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 操作员组。选择操作员组会显示高权限警告并要求二次确认；非交互执行必须用 `--group user` 或 `--group operator` 指定组，创建操作员还需要 `--yes`。
 
 注册用户名请使用本人姓名全拼，只能包含字母、数字、下划线和连字符；密码至少 8 位，需包含大写字母、小写字母、数字和特殊字符。
 
@@ -360,7 +360,7 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 | 命令 | 说明 |
 |---|---|
 | `ft-admin init` | 初始化 RustFS 桶、策略和系统身份 |
-| `ft-admin user add <username> [--group user\|operator] [--yes]` | 添加用户，组通过菜单选择，默认普通用户组；操作员组需二次确认 |
+| `ft-admin user add <username> [--group user\|operator] [--yes]` | 添加用户，交互式用菜单选组；非交互必须指定 `--group`，操作员组需 `--yes` |
 | `ft-admin user del <username> [--yes]` | 删除用户及其全部数据 |
 | `ft-admin user reset <username>` | 重置用户密码，输出一次性新密码 |
 | `ft-admin user list` | 列出用户、类型、状态、策略和组 |

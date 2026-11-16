@@ -283,7 +283,8 @@ func addUser(ac *adminapi.Client, name, group string, yes bool) {
 				group = iam.AdminGroup
 			}
 		} else {
-			group = iam.UserGroup
+			failf("非交互创建用户必须用 --group user 或 --group operator 指定组")
+			return
 		}
 	}
 	if group != iam.UserGroup && group != iam.AdminGroup {
