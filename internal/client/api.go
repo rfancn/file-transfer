@@ -54,6 +54,7 @@ type Client struct {
 	policy     protocol.UploadPolicy
 	clientUser string
 	clientHost string
+	retryLog   io.Writer
 	mu         sync.Mutex
 }
 
@@ -83,6 +84,7 @@ func New(cfg config.ClientConfig) (*Client, error) {
 		http:       &http.Client{},
 		clientUser: clientUser,
 		clientHost: clientHost,
+		retryLog:   os.Stderr,
 	}, nil
 }
 
@@ -244,6 +246,7 @@ func (c *Client) retryBusy(req *http.Request, getBody func() (io.ReadCloser, err
 		// 先排空少量响应体再关闭，便于连接复用。
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
+		retryNotice(c.retryLog, wait)
 		if err := sleepContext(req.Context(), wait); err != nil {
 			return nil, err
 		}
@@ -300,6 +303,18 @@ func retryWait(resp *http.Response, attempt int) time.Duration {
 	base := retryBaseWait * time.Duration(1<<shift)
 	jitter := time.Duration(rand.Int63n(int64(500 * time.Millisecond)))
 	return base + jitter
+}
+
+// retryNotice 在重试等待前提示用户，避免误以为命令卡住。
+func retryNotice(w io.Writer, wait time.Duration) {
+	if w == nil {
+		return
+	}
+	if wait > 0 {
+		_, _ = fmt.Fprintf(w, "服务器繁忙，等待 %d 秒后重试\n", int64(wait.Round(time.Second)/time.Second))
+		return
+	}
+	_, _ = fmt.Fprintln(w, "服务器繁忙，正在重试")
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

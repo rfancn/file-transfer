@@ -162,6 +162,52 @@ func TestSleepContextCanceled(t *testing.T) {
 	}
 }
 
+func TestRetryNotice(t *testing.T) {
+	var buf bytes.Buffer
+	retryNotice(&buf, 5*time.Second)
+	if got := buf.String(); !strings.Contains(got, "服务器繁忙，等待 5 秒后重试") {
+		t.Fatalf("notice = %q", got)
+	}
+
+	buf.Reset()
+	retryNotice(&buf, 0)
+	if got := buf.String(); !strings.Contains(got, "服务器繁忙，正在重试") {
+		t.Fatalf("notice = %q", got)
+	}
+
+	retryNotice(nil, time.Second) // 不应 panic
+}
+
+func TestExecuteShowsRetryNotice(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"server_busy","message":"busy"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	c := &Client{http: srv.Client(), retryLog: &buf}
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.execute(req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if !strings.Contains(buf.String(), "服务器繁忙") {
+		t.Fatalf("未输出重试提示: %q", buf.String())
+	}
+}
+
 func TestRetryWait(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
 	resp.Header.Set("Retry-After", "7")
