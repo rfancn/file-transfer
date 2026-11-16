@@ -19,6 +19,12 @@ type Manager struct {
 	Client *minio.Client
 	Core   minio.Core
 	Bucket string
+
+	host      string
+	accessKey string
+	secretKey string
+	secure    bool
+	region    string
 }
 
 func New(endpoint, ak, sk, region string, bucket string) (*Manager, error) {
@@ -32,29 +38,66 @@ func New(endpoint, ak, sk, region string, bucket string) (*Manager, error) {
 		region = "us-east-1"
 	}
 	c, err := minio.New(host, &minio.Options{
-		Creds:  credentials.NewStaticV4(ak, sk, ""),
-		Secure: secure,
-		Region: region,
+		Creds:        credentials.NewStaticV4(ak, sk, ""),
+		Secure:       secure,
+		Region:       region,
+		BucketLookup: minio.BucketLookupPath,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{Client: c, Core: minio.Core{Client: c}, Bucket: bucket}, nil
+	return &Manager{
+		Client: c, Core: minio.Core{Client: c}, Bucket: bucket,
+		host: host, accessKey: ak, secretKey: sk, secure: secure, region: region,
+	}, nil
+}
+
+func (m *Manager) useRegion(region string) error {
+	c, err := minio.New(m.host, &minio.Options{
+		Creds:        credentials.NewStaticV4(m.accessKey, m.secretKey, ""),
+		Secure:       m.secure,
+		Region:       region,
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		return err
+	}
+	m.Client = c
+	m.Core = minio.Core{Client: c}
+	m.region = region
+	return nil
 }
 
 // EnsureBucket 保证桶存在。BucketExists 失败时不影响后续创建尝试；
-// 创建时已存在则视为成功。
+// 创建时已存在则视为成功。遇到 region 重定向时按服务端返回的 region 重试。
 func (m *Manager) EnsureBucket(ctx context.Context) error {
 	if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
 		return nil
 	}
-	if err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: "us-east-1"}); err != nil {
-		if isBucketAlreadyExists(err) {
-			return nil
-		}
-		return err
+	err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: m.region})
+	if err == nil || isBucketAlreadyExists(err) {
+		return nil
 	}
-	return nil
+	resp := minio.ToErrorResponse(err)
+	if resp.Code == "PermanentRedirect" {
+		if resp.Region != "" && resp.Region != m.region {
+			if rerr := m.useRegion(resp.Region); rerr == nil {
+				if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
+					return nil
+				}
+				if merr := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: resp.Region}); merr == nil || isBucketAlreadyExists(merr) {
+					return nil
+				}
+			}
+		}
+		scheme := "http"
+		if m.secure {
+			scheme = "https"
+		}
+		return fmt.Errorf("创建桶 %s 返回 PermanentRedirect：请检查 s3.endpoint=%s://%s 是否应使用 https，以及 s3.region=%s 是否与 bucket 所在区域一致（服务端 region=%s）",
+			m.Bucket, scheme, m.host, m.region, resp.Region)
+	}
+	return err
 }
 
 func isBucketAlreadyExists(err error) bool {

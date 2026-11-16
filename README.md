@@ -489,3 +489,12 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 **`outbound` 为什么没有被自动清理？**
 
 默认配置中 `outbound_days = 0`，即不自动清理。需要显式执行 `ft-admin clean outbound --days N`，或在配置中设置保留天数。
+
+**`ft-admin init` 报 `创建桶 ...: Permanent Redirect`？**
+
+通常是 `s3.endpoint` 或 `s3.region` 不匹配：
+
+- 确认 `s3.endpoint` / `FT_S3_ENDPOINT` 使用 RustFS 的 HTTPS API 地址，例如 `https://s3.sysummit.internal`；不要用 `http://host.docker.internal:9000` 访问只提供 HTTPS 的入口。
+- 确认 `s3.region` 与 bucket 所在 region 一致；当前部署通常为 `us-east-1`。
+- 如果 `ft-server` 在 Docker 中，确认容器能解析该域名，并信任 RustFS 的证书。
+- 新版本会在错误中带出当前 endpoint、配置 region 和服务端返回的 region。
