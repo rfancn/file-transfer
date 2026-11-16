@@ -94,3 +94,23 @@ func TestPermanentRedirectClassification(t *testing.T) {
 		t.Fatal("non-redirect errors must not match")
 	}
 }
+
+func TestUseHTTPSNormalizesPort80(t *testing.T) {
+	m := &Manager{host: "s3.example.com:80", accessKey: "a", secretKey: "b", region: "us-east-1"}
+	if err := m.useHTTPS(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.secure || m.host != "s3.example.com" {
+		t.Fatalf("secure=%v host=%q", m.secure, m.host)
+	}
+}
+
+func TestRecoverRedirectUpgradesHTTP(t *testing.T) {
+	m := &Manager{host: "s3.example.com", accessKey: "a", secretKey: "b", region: "us-east-1"}
+	if !m.recoverRedirect(minio.ErrorResponse{Code: "PermanentRedirect", StatusCode: http.StatusMovedPermanently}) {
+		t.Fatal("expected redirect recovery")
+	}
+	if !m.secure {
+		t.Fatal("expected HTTPS upgrade")
+	}
+}

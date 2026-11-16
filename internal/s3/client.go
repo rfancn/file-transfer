@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,35 +69,80 @@ func (m *Manager) useRegion(region string) error {
 	return nil
 }
 
-// EnsureBucket 保证桶存在。BucketExists 失败时不影响后续创建尝试；
-// 创建时已存在则视为成功。遇到 region 重定向时按服务端返回的 region 重试。
-func (m *Manager) EnsureBucket(ctx context.Context) error {
-	ok, existsErr := m.Client.BucketExists(ctx, m.Bucket)
-	if ok {
+func (m *Manager) useHTTPS() error {
+	if m.secure {
 		return nil
 	}
-	if isPermanentRedirect(existsErr) {
-		return m.redirectError(existsErr)
+	host := m.host
+	if h, p, err := net.SplitHostPort(host); err == nil && p == "80" {
+		host = h
 	}
-	err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: m.region})
-	if err == nil || isBucketAlreadyExists(err) {
-		return nil
+	c, err := minio.New(host, &minio.Options{
+		Creds:        credentials.NewStaticV4(m.accessKey, m.secretKey, ""),
+		Secure:       true,
+		Region:       m.region,
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		return err
 	}
-	if isPermanentRedirect(err) {
-		resp := minio.ToErrorResponse(err)
-		if resp.Region != "" && resp.Region != m.region {
-			if rerr := m.useRegion(resp.Region); rerr == nil {
-				if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
-					return nil
-				}
-				if merr := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: resp.Region}); merr == nil || isBucketAlreadyExists(merr) {
-					return nil
-				}
-			}
+	m.Client = c
+	m.Core = minio.Core{Client: c}
+	m.host = host
+	m.secure = true
+	return nil
+}
+
+// recoverRedirect 根据 301 尝试切换到 HTTPS 和/或服务端返回的 region。
+func (m *Manager) recoverRedirect(err error) bool {
+	changed := false
+	if !m.secure {
+		if herr := m.useHTTPS(); herr == nil {
+			changed = true
 		}
-		return m.redirectError(err)
 	}
-	return err
+	resp := minio.ToErrorResponse(err)
+	if resp.Region != "" && resp.Region != m.region {
+		if rerr := m.useRegion(resp.Region); rerr == nil {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// EnsureBucket 保证桶存在。BucketExists 失败时不影响后续创建尝试；
+// 创建时已存在则视为成功。遇到 HTTP→HTTPS 或 region 重定向时自动重试。
+func (m *Manager) EnsureBucket(ctx context.Context) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		ok, existsErr := m.Client.BucketExists(ctx, m.Bucket)
+		if ok {
+			return nil
+		}
+		if isPermanentRedirect(existsErr) {
+			lastErr = existsErr
+			if m.recoverRedirect(existsErr) {
+				continue
+			}
+			return m.redirectError(existsErr)
+		}
+		err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: m.region})
+		if err == nil || isBucketAlreadyExists(err) {
+			return nil
+		}
+		if isPermanentRedirect(err) {
+			lastErr = err
+			if m.recoverRedirect(err) {
+				continue
+			}
+			return m.redirectError(err)
+		}
+		return err
+	}
+	if lastErr != nil {
+		return m.redirectError(lastErr)
+	}
+	return nil
 }
 
 func isPermanentRedirect(err error) bool {
