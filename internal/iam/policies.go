@@ -14,11 +14,9 @@ const (
 	policyOperatorFile   = "operator-group.json"
 	policyServerDataFile = "server-data.json"
 	policyServerAdmin    = "server-admin.json"
-
-	placeholderBucket = "{{bucket}}"
 )
 
-// Policies 保存从 policy 目录加载并渲染后的 IAM 策略。
+// Policies 保存从 policy 目录加载的 IAM 策略。
 type Policies struct {
 	Group    []byte
 	Operator []byte
@@ -26,28 +24,25 @@ type Policies struct {
 	Admin    []byte
 }
 
-// LoadPolicies 从 dir 读取策略文件，替换 {{bucket}} 并校验 JSON。
-func LoadPolicies(dir, bucket string) (*Policies, error) {
+// LoadPolicies 从 dir 读取策略文件并校验 JSON。
+func LoadPolicies(dir string) (*Policies, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("policy 目录不能为空")
 	}
-	if strings.TrimSpace(bucket) == "" {
-		return nil, errors.New("bucket 不能为空")
-	}
 
-	group, err := loadPolicyFile(dir, policyUserGroupFile, bucket)
+	group, err := loadPolicyFile(dir, policyUserGroupFile)
 	if err != nil {
 		return nil, err
 	}
-	operator, err := loadPolicyFile(dir, policyOperatorFile, bucket)
+	operator, err := loadPolicyFile(dir, policyOperatorFile)
 	if err != nil {
 		return nil, err
 	}
-	data, err := loadPolicyFile(dir, policyServerDataFile, bucket)
+	data, err := loadPolicyFile(dir, policyServerDataFile)
 	if err != nil {
 		return nil, err
 	}
-	admin, err := loadPolicyFile(dir, policyServerAdmin, bucket)
+	admin, err := loadPolicyFile(dir, policyServerAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -59,20 +54,19 @@ func LoadPolicies(dir, bucket string) (*Policies, error) {
 	}, nil
 }
 
-func loadPolicyFile(dir, name, bucket string) ([]byte, error) {
+func loadPolicyFile(dir, name string) ([]byte, error) {
 	path := filepath.Join(dir, name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取策略 %s: %w", path, err)
 	}
-	text := strings.ReplaceAll(string(raw), placeholderBucket, bucket)
-	if strings.Contains(text, "{{") || strings.Contains(text, "}}") {
+	if strings.Contains(string(raw), "{{") || strings.Contains(string(raw), "}}") {
 		return nil, fmt.Errorf("策略 %s 包含未知占位符", path)
 	}
-	if err := validatePolicyJSON([]byte(text)); err != nil {
+	if err := validatePolicyJSON(raw); err != nil {
 		return nil, fmt.Errorf("策略 %s JSON 无效: %w", path, err)
 	}
-	return []byte(text), nil
+	return raw, nil
 }
 
 func validatePolicyJSON(raw []byte) error {

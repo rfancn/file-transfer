@@ -10,7 +10,7 @@ import (
 
 func loadTestPolicies(t *testing.T) *Policies {
 	t.Helper()
-	p, err := LoadPolicies(filepath.Join("..", "..", "policy"), "file-transfer")
+	p, err := LoadPolicies(filepath.Join("..", "..", "policy"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestServerDataPolicyKeepsPlaceholders(t *testing.T) {
 func TestLoadPoliciesMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	writeValidPolicies(t, dir, policyServerAdmin)
-	if _, err := LoadPolicies(dir, "bucket"); err == nil || !strings.Contains(err.Error(), policyServerAdmin) {
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyServerAdmin) {
 		t.Fatalf("期望缺少 %s 的错误，得到 %v", policyServerAdmin, err)
 	}
 }
@@ -235,7 +235,7 @@ func TestLoadPoliciesInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(`{"Version":`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir, "bucket"); err == nil || !strings.Contains(err.Error(), policyUserGroupFile) {
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyUserGroupFile) {
 		t.Fatalf("期望 %s JSON 错误，得到 %v", policyUserGroupFile, err)
 	}
 }
@@ -243,11 +243,11 @@ func TestLoadPoliciesInvalidJSON(t *testing.T) {
 func TestLoadPoliciesUnknownPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	writeValidPolicies(t, dir, "")
-	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/{{other}}/*"]}]}`
+	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/{{other}}/*"]}]}`
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir, "bucket"); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
 		t.Fatalf("期望未知占位符错误，得到 %v", err)
 	}
 }
@@ -255,24 +255,24 @@ func TestLoadPoliciesUnknownPlaceholder(t *testing.T) {
 func TestLoadPoliciesResidualBrace(t *testing.T) {
 	dir := t.TempDir()
 	writeValidPolicies(t, dir, "")
-	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/user}}/*"]}]}`
+	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/user}}/*"]}]}`
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir, "bucket"); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
 		t.Fatalf("期望残留占位符错误，得到 %v", err)
 	}
 }
 
 func TestLoadPoliciesEmptyDir(t *testing.T) {
-	if _, err := LoadPolicies(t.TempDir(), "bucket"); err == nil {
+	if _, err := LoadPolicies(t.TempDir()); err == nil {
 		t.Fatal("空目录应返回错误")
 	}
 }
 
 func writeValidPolicies(t *testing.T, dir, skip string) {
 	t.Helper()
-	plain := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::{{bucket}}/*"]}]}`
+	plain := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/*"]}]}`
 	files := map[string]string{
 		policyUserGroupFile:  plain,
 		policyOperatorFile:   plain,

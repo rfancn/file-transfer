@@ -236,7 +236,9 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 | `server-data.json` | `ft-data` 服务身份策略 |
 | `server-admin.json` | `ft-admin` 服务身份策略 |
 
-- `{{bucket}}` 由 `ft-server` 启动时替换；`${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
+- 策略中的 bucket 固定为 `file-transfer`，`ft-server` 不再替换 bucket；请确保 `FT_BUCKET` 与此一致。
+- `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
+- 策略文件不能包含 `{{...}}` 占位符，加载时会校验。
 - 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
 - `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。

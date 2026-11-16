@@ -45,7 +45,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	if policyDir == "" {
 		policyDir = "policy"
 	}
-	policies, err := iam.LoadPolicies(policyDir, cfg.S3.Bucket)
+	policies, err := iam.LoadPolicies(policyDir)
 	if err != nil {
 		return nil, fmt.Errorf("加载 IAM 策略: %w", err)
 	}

@@ -20,7 +20,7 @@
       },
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}"
+        "arn:aws:s3:::file-transfer"
       ]
     },
     {
@@ -33,7 +33,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/inbound/*"
+        "arn:aws:s3:::file-transfer/*/inbound/*"
       ]
     },
     {
@@ -46,7 +46,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/upload/*"
+        "arn:aws:s3:::file-transfer/*/upload/*"
       ]
     },
     {
@@ -58,7 +58,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/outbound/*"
+        "arn:aws:s3:::file-transfer/*/outbound/*"
       ]
     },
     {
@@ -67,7 +67,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/inbound/.keep"
+        "arn:aws:s3:::file-transfer/*/inbound/.keep"
       ]
     },
     {
@@ -76,7 +76,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/outbound/.keep"
+        "arn:aws:s3:::file-transfer/*/outbound/.keep"
       ]
     },
     {
@@ -85,7 +85,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}/*/upload/.keep"
+        "arn:aws:s3:::file-transfer/*/upload/.keep"
       ]
     },
     {
@@ -95,7 +95,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::{{bucket}}"
+        "arn:aws:s3:::file-transfer"
       ]
     }
   ],
