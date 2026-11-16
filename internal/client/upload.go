@@ -380,7 +380,10 @@ func (c *Client) putMultipart(ctx context.Context, f UploadFile, mtime, partSize
 			if err != nil {
 				return nil, err
 			}
-			return io.NopCloser(io.NewSectionReader(fh, offset, expected)), nil
+			return sectionReadCloser{
+				Reader: io.NewSectionReader(fh, offset, expected),
+				Closer: fh,
+			}, nil
 		}
 		resp, err := c.execute(req, req.GetBody)
 		if err != nil {
@@ -452,6 +455,12 @@ type progressReader struct {
 	done  int64
 	total int64
 	fn    ProgressFunc
+}
+
+// sectionReadCloser 让 SectionReader 在 Close 时关闭底层文件。
+type sectionReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {

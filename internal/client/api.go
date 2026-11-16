@@ -241,6 +241,8 @@ func (c *Client) retryBusy(req *http.Request, getBody func() (io.ReadCloser, err
 		if attempt >= maxRetryAttempts || waited+wait > maxRetryWait {
 			return resp, nil
 		}
+		// 先排空少量响应体再关闭，便于连接复用。
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
 		if err := sleepContext(req.Context(), wait); err != nil {
 			return nil, err
@@ -278,6 +280,10 @@ func replayRequest(req *http.Request, getBody func() (io.ReadCloser, error)) (*h
 func retryWait(resp *http.Response, attempt int) time.Duration {
 	if v := strings.TrimSpace(resp.Header.Get("Retry-After")); v != "" {
 		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+			// 防止秒数过大导致乘法溢出。
+			if secs > int(maxRetryWait/time.Second) {
+				return maxRetryWait
+			}
 			return time.Duration(secs) * time.Second
 		}
 		if t, err := http.ParseTime(v); err == nil {

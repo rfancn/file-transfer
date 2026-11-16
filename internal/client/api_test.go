@@ -1,7 +1,9 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +89,79 @@ func TestExecuteDoesNotRetryUnreplayableBody(t *testing.T) {
 	}
 }
 
+func TestExecuteReplaysBodyOnRetry(t *testing.T) {
+	payload := []byte("hello retry")
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(data))
+		if len(bodies) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"server_busy","message":"busy"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{http: srv.Client()}
+	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.execute(req, nil) // 走 req.GetBody 回退
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d，期望 200", resp.StatusCode)
+	}
+	if len(bodies) != 2 || bodies[0] != string(payload) || bodies[1] != string(payload) {
+		t.Fatalf("请求体重放不正确: %q", bodies)
+	}
+}
+
+func TestExecuteRetriesServiceUnavailable(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{http: srv.Client()}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.execute(req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d，期望 200", resp.StatusCode)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d，期望 2", attempts)
+	}
+}
+
+func TestSleepContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepContext(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v，期望 context.Canceled", err)
+	}
+}
+
 func TestRetryWait(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
 	resp.Header.Set("Retry-After", "7")
@@ -97,6 +172,11 @@ func TestRetryWait(t *testing.T) {
 	resp.Header.Set("Retry-After", time.Now().Add(2*time.Second).UTC().Format(http.TimeFormat))
 	if got := retryWait(resp, 1); got <= 0 || got > 2*time.Second {
 		t.Fatalf("Retry-After 日期 = %v", got)
+	}
+
+	resp.Header.Set("Retry-After", time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat))
+	if got := retryWait(resp, 1); got != 0 {
+		t.Fatalf("过去的 Retry-After 日期 = %v，期望 0", got)
 	}
 
 	resp.Header.Del("Retry-After")
