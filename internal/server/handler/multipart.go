@@ -51,8 +51,10 @@ func (h *Handler) MultipartInit(c *gin.Context) {
 	if !ok {
 		return
 	}
-	defer release()
-	s3ID, err := h.Data.NewMultipart(c.Request.Context(), key)
+	s3ID, err := func() (string, error) {
+		defer release()
+		return h.Data.NewMultipart(c.Request.Context(), key)
+	}()
 	if err != nil {
 		logging.Error("multipart init", "key", key, "err", err)
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "初始化分片失败")
@@ -142,8 +144,10 @@ func (h *Handler) MultipartParts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	defer release()
-	parts, err := h.Data.ListParts(c.Request.Context(), claims.Path, claims.S3UploadID)
+	parts, err := func() ([]protocol.PartInfo, error) {
+		defer release()
+		return h.Data.ListParts(c.Request.Context(), claims.Path, claims.S3UploadID)
+	}()
 	if err != nil {
 		if s3.IsNotFound(err) {
 			response.Err(c, http.StatusNotFound, "upload_not_found", "分片上传不存在或已过期，请重新上传")

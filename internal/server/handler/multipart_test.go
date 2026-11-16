@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/auth"
 	"github.com/rfancn/file-transfer/internal/config"
 	"github.com/rfancn/file-transfer/internal/limiter"
+	"github.com/rfancn/file-transfer/internal/protocol"
 	"github.com/rfancn/file-transfer/internal/server/app"
 )
 
@@ -62,5 +64,15 @@ func TestMultipartPartReturnsBusy(t *testing.T) {
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d，期望 429", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q，期望 \"1\"", got)
+	}
+	var body protocol.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "server_busy" {
+		t.Fatalf("error = %q，期望 server_busy", body.Error)
 	}
 }
