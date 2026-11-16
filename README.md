@@ -399,15 +399,16 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 
 | 配置 | 说明 | 默认 |
 |---|---|---:|
+| `enabled` | 总开关 | `true` |
 | `max_concurrent` | 全局同时传输数 | 4 |
 | `max_concurrent_per_user` | 单用户同时传输数 | 1 |
 | `global_read_bps` | 全局下载带宽，0 表示不限 | 0 |
 | `global_write_bps` | 全局上传带宽，0 表示不限 | 0 |
-| `per_user_read_bps` | 单用户下载带宽 | 0 |
-| `per_user_write_bps` | 单用户上传带宽 | 0 |
+| `per_user_read_bps` | 单用户下载带宽，0 表示不限 | 0 |
+| `per_user_write_bps` | 单用户上传带宽，0 表示不限 | 0 |
 | `queue_timeout` | 排队超时 | 10s |
 
-- 并发上限是第一道闸门，用于保护 HDD 寻道；bps 默认 0，先用 warp 测出对象层吞吐，再按 70% 左右填入。
+- 并发上限是第一道闸门，用于保护 HDD 寻道；bps 默认 0，先用 warp 测出对象层吞吐，再写约 70%、读约 75% 填入。
 - 单用户带宽建议取全局值的一半，防止一个用户占满。
 - 超过 `queue_timeout` 返回 `429` 和 `Retry-After`，`ft-client` 会自动退避重试。
 - Console/Cyberduck 直连不经过 `ft-server`，不受这些值限制，需要由系统层 cgroup 兜底。

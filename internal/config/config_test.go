@@ -454,4 +454,7 @@ func TestExampleServerConfigHasLimits(t *testing.T) {
 	if cfg.Limits.MaxConcurrent != 4 {
 		t.Fatalf("max_concurrent = %d，期望 4", cfg.Limits.MaxConcurrent)
 	}
+	if _, err := cfg.Runtime("../../config/ft-server.example.toml"); err != nil {
+		t.Fatalf("示例配置无法通过 Runtime 校验: %v", err)
+	}
 }
