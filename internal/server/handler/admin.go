@@ -36,7 +36,7 @@ func (h *Handler) AdminInit(c *gin.Context) {
 		response.Err(c, http.StatusInternalServerError, "internal_error", "创建 RustFS 管理客户端失败")
 		return
 	}
-	if _, err := probe.UserExists(c.Request.Context(), iam.ConsoleAdmin); err != nil {
+	if _, err := probe.UserExists(c.Request.Context(), iam.DataUser); err != nil {
 		logging.Warn("admin init 凭据验证失败", "endpoint", h.Cfg.S3.Endpoint, "access_key", req.AccessKey, "err", err)
 		low := strings.ToLower(err.Error())
 		if strings.Contains(low, "signature") {
