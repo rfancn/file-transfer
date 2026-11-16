@@ -79,9 +79,13 @@ func (l *Limiter) Close() {
 }
 
 // AcquireTransfer 同时获取全局和单用户的传输槽。
+// 返回的 release 只能调用一次。
 func (l *Limiter) AcquireTransfer(ctx context.Context, username string) (func(), error) {
 	if !l.cfg.Enabled {
 		return func() {}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	u := l.user(username)
 	waitCtx, cancel := context.WithTimeout(ctx, l.cfg.QueueTimeout)
@@ -106,6 +110,9 @@ func (l *Limiter) AcquireMetadata(ctx context.Context) (func(), error) {
 	if !l.cfg.Enabled {
 		return func() {}, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, l.cfg.QueueTimeout)
 	defer cancel()
 	if err := acquire(waitCtx, l.meta); err != nil {
@@ -115,6 +122,7 @@ func (l *Limiter) AcquireMetadata(ctx context.Context) (func(), error) {
 }
 
 // WrapUpload 给上传请求体加每用户和全局写限速。
+// 调用方必须先持有该用户的传输槽（AcquireTransfer），否则用户状态可能在传输途中被 GC。
 func (l *Limiter) WrapUpload(ctx context.Context, r io.Reader, username string) io.Reader {
 	if !l.cfg.Enabled {
 		return r
@@ -124,6 +132,7 @@ func (l *Limiter) WrapUpload(ctx context.Context, r io.Reader, username string) 
 }
 
 // WrapDownload 给下载响应体加每用户和全局读限速。
+// 调用方必须先持有该用户的传输槽（AcquireTransfer），否则用户状态可能在传输途中被 GC。
 func (l *Limiter) WrapDownload(ctx context.Context, r io.Reader, username string) io.Reader {
 	if !l.cfg.Enabled {
 		return r
@@ -140,6 +149,10 @@ func busyErr(ctx context.Context) error {
 }
 
 func acquire(ctx context.Context, ch chan struct{}) error {
+	// 先做确定性检查，避免 context 已取消且 channel 有空位时随机选中发送分支。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case ch <- struct{}{}:
 		return nil

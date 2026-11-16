@@ -97,10 +97,61 @@ func TestDisabledLimiter(t *testing.T) {
 	}
 	release()
 
+	metaRelease, err := l.AcquireMetadata(context.Background())
+	if err != nil || metaRelease == nil {
+		t.Fatalf("disabled: 元数据槽不应报错, err=%v", err)
+	}
+	metaRelease()
+
 	r := l.WrapUpload(context.Background(), bytes.NewReader([]byte("x")), "a")
 	if r == nil {
 		t.Fatal("WrapUpload 不应返回 nil")
 	}
+	dr := l.WrapDownload(context.Background(), bytes.NewReader([]byte("x")), "a")
+	if dr == nil {
+		t.Fatal("WrapDownload 不应返回 nil")
+	}
+}
+
+func TestCloseTwice(t *testing.T) {
+	l := New(testConfig())
+
+	l.Close()
+	l.Close()
+}
+
+func TestAcquireTransferCanceledContext(t *testing.T) {
+	l := New(testConfig())
+	defer l.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := l.AcquireTransfer(ctx, "a"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AcquireTransfer 应返回 context.Canceled，得到 %v", err)
+	}
+	release, err := l.AcquireTransfer(context.Background(), "a")
+	if err != nil {
+		t.Fatalf("取消的请求不应占用槽位: %v", err)
+	}
+	release()
+}
+
+func TestAcquireMetadataCanceledContext(t *testing.T) {
+	l := New(testConfig())
+	defer l.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := l.AcquireMetadata(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AcquireMetadata 应返回 context.Canceled，得到 %v", err)
+	}
+	release, err := l.AcquireMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("取消的请求不应占用元数据槽: %v", err)
+	}
+	release()
 }
 
 func TestRateLimitUpload(t *testing.T) {
@@ -133,8 +184,9 @@ func TestRateLimitContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	data := bytes.Repeat([]byte("x"), (1<<20)+(64<<10))
-	if _, err := io.ReadAll(l.WrapUpload(ctx, bytes.NewReader(data), "a")); err == nil {
-		t.Fatal("期望 context 取消错误")
+	_, err := io.ReadAll(l.WrapUpload(ctx, bytes.NewReader(data), "a"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("期望 context.DeadlineExceeded，得到 %v", err)
 	}
 }
 
