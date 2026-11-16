@@ -53,3 +53,14 @@
   [[multipart.tiers]]
     max = "1.25TiB"
     part = "128MiB"
+
+# 应用层 I/O 限速；bps 为 0 表示该维度不限，测量后再填。
+[limits]
+  enabled = true
+  max_concurrent = 4
+  max_concurrent_per_user = 1
+  global_read_bps = "0"
+  global_write_bps = "0"
+  per_user_read_bps = "0"
+  per_user_write_bps = "0"
+  queue_timeout = "10s"

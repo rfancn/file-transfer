@@ -29,6 +29,12 @@ type AdminLoginResponse struct {
 	ExpiresIn int64  `json:"expires_in"`
 }
 
+type AddUserRequest struct {
+	Username        string `json:"username"`
+	Group           string `json:"group"`
+	ConfirmOperator bool   `json:"confirm_operator"`
+}
+
 type AddUserResponse struct {
 	Username string `json:"username"`
 	Password string `json:"password"`

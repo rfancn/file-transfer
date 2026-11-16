@@ -7,6 +7,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/adminuser"
 	"github.com/rfancn/file-transfer/internal/config"
 	"github.com/rfancn/file-transfer/internal/iam"
+	"github.com/rfancn/file-transfer/internal/limiter"
 	"github.com/rfancn/file-transfer/internal/s3"
 )
 
@@ -16,7 +17,9 @@ type App struct {
 	Data     *s3.Manager
 	AdminS3  *s3.Manager
 	IAM      *iam.Manager
+	Policies *iam.Policies
 	Admins   *adminuser.Store
+	Limits   *limiter.Limiter
 	Ready    bool
 	Shutdown func(ctx context.Context) error
 }

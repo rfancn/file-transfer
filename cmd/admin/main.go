@@ -14,6 +14,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/adminapi"
 	"github.com/rfancn/file-transfer/internal/cliui"
 	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/iam"
 	"github.com/rfancn/file-transfer/internal/version"
 )
 
@@ -221,9 +222,24 @@ func runUser(ac *adminapi.Client, args []string) {
 	switch args[0] {
 	case "add":
 		if len(args) < 2 {
-			log.Fatal("用法: ft-admin user add <username>")
+			log.Fatal("用法: ft-admin user add <username> [--group user|operator] [--yes]")
 		}
-		addUser(ac, args[1])
+		name, group, yes := args[1], "", false
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--group":
+				if i+1 >= len(args) {
+					log.Fatal("--group 需要 user 或 operator")
+				}
+				group = args[i+1]
+				i++
+			case "--yes":
+				yes = true
+			default:
+				log.Fatalf("未知参数: %s", args[i])
+			}
+		}
+		addUser(ac, name, group, yes)
 	case "del":
 		if len(args) < 2 {
 			log.Fatal("用法: ft-admin user del <username> [--yes]")
@@ -242,10 +258,65 @@ func runUser(ac *adminapi.Client, args []string) {
 	}
 }
 
-func addUser(ac *adminapi.Client, name string) {
+func addUser(ac *adminapi.Client, name, group string, yes bool) {
+	if group == "user" {
+		group = iam.UserGroup
+	} else if group == "operator" {
+		group = iam.AdminGroup
+	}
+	if group == "" {
+		if cliui.IsInteractive() {
+			idx, err := cliui.Select("选择用户组", []string{
+				"普通用户组 (ft-user-group)",
+				"操作员组 (ft-operator-group)",
+			})
+			if canceledByUser(err) {
+				return
+			}
+			if err != nil {
+				failf("选择用户组失败: %v", err)
+				return
+			}
+			if idx == 0 {
+				group = iam.UserGroup
+			} else {
+				group = iam.AdminGroup
+			}
+		} else {
+			failf("非交互创建用户必须用 --group user 或 --group operator 指定组")
+			return
+		}
+	}
+	if group != iam.UserGroup && group != iam.AdminGroup {
+		failf("组只允许 %s 或 %s", iam.UserGroup, iam.AdminGroup)
+		return
+	}
+	confirmOperator := false
+	if group == iam.AdminGroup {
+		fmt.Println("警告：操作员可以读取所有用户的 outbound，并向所有用户 inbound 放件/删除文件。")
+		if !yes {
+			if !cliui.IsInteractive() {
+				failf("非交互创建操作员账号需要 --yes")
+				return
+			}
+			ok, err := cliui.Confirm("确认创建操作员账号", false)
+			if canceledByUser(err) {
+				return
+			}
+			if err != nil {
+				failf("确认失败: %v", err)
+				return
+			}
+			if !ok {
+				fmt.Println("已取消")
+				return
+			}
+		}
+		confirmOperator = true
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ac.AddUser(ctx, name)
+	res, err := ac.AddUser(ctx, name, group, confirmOperator)
 	if err != nil {
 		if ae, ok := adminapi.AsAPIError(err); ok && ae.Code == "already_exists" {
 			fmt.Printf("用户已存在，不重置密码: %s\n", name)
@@ -428,7 +499,7 @@ func menu(cfg config.AdminConfig, ac *adminapi.Client) {
 		switch idx {
 		case 0:
 			if name, ok := promptUsername(); ok {
-				addUser(ac, name)
+				addUser(ac, name, "", false)
 			}
 		case 1:
 			if name, ok := promptUsername(); ok {

@@ -47,7 +47,14 @@ func (h *Handler) MultipartInit(c *gin.Context) {
 		return
 	}
 	key := username + "/" + rel
-	s3ID, err := h.Data.NewMultipart(c.Request.Context(), key)
+	release, ok := h.acquireMetadata(c)
+	if !ok {
+		return
+	}
+	s3ID, err := func() (string, error) {
+		defer release()
+		return h.Data.NewMultipart(c.Request.Context(), key)
+	}()
 	if err != nil {
 		logging.Error("multipart init", "key", key, "err", err)
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "初始化分片失败")
@@ -105,8 +112,23 @@ func (h *Handler) MultipartPart(c *gin.Context) {
 		response.Err(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("分片大小必须在 1-%d 字节之间", claims.PartSize))
 		return
 	}
-	etag, err := h.Data.PutPart(c.Request.Context(), claims.Path, claims.S3UploadID, partNum, c.Request.Body, c.Request.ContentLength)
+	release, ok := h.acquireTransfer(c, username)
+	if !ok {
+		return
+	}
+	defer release()
+	etag, err := h.Data.PutPart(c.Request.Context(), claims.Path, claims.S3UploadID, partNum, h.wrapUpload(c, c.Request.Body, username), c.Request.ContentLength)
 	if err != nil {
+		// 客户端已断开时不再写响应
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
+			logging.Warn("limit stream canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"reason", cancelReason(ctxErr),
+				"path", rel)
+			return
+		}
 		if s3.IsNotFound(err) {
 			response.Err(c, http.StatusNotFound, "upload_not_found", "分片上传不存在或已过期，请重新上传")
 			return
@@ -124,7 +146,14 @@ func (h *Handler) MultipartParts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	parts, err := h.Data.ListParts(c.Request.Context(), claims.Path, claims.S3UploadID)
+	release, ok := h.acquireMetadata(c)
+	if !ok {
+		return
+	}
+	parts, err := func() ([]protocol.PartInfo, error) {
+		defer release()
+		return h.Data.ListParts(c.Request.Context(), claims.Path, claims.S3UploadID)
+	}()
 	if err != nil {
 		if s3.IsNotFound(err) {
 			response.Err(c, http.StatusNotFound, "upload_not_found", "分片上传不存在或已过期，请重新上传")
@@ -154,6 +183,11 @@ func (h *Handler) MultipartComplete(c *gin.Context) {
 		return
 	}
 	sort.Slice(req.Parts, func(i, j int) bool { return req.Parts[i].Number < req.Parts[j].Number })
+	release, ok := h.acquireTransfer(c, username)
+	if !ok {
+		return
+	}
+	defer release()
 	if err := h.Data.CompleteMultipart(c.Request.Context(), claims.Path, claims.S3UploadID, req.Parts); err != nil {
 		if s3.IsNotFound(err) {
 			response.Err(c, http.StatusNotFound, "upload_not_found", "分片上传不存在或已过期，请重新上传")
@@ -176,6 +210,11 @@ func (h *Handler) MultipartAbort(c *gin.Context) {
 	if !ok {
 		return
 	}
+	release, ok := h.acquireMetadata(c)
+	if !ok {
+		return
+	}
+	defer release()
 	if err := h.Data.AbortMultipart(c.Request.Context(), claims.Path, claims.S3UploadID); err != nil {
 		if !s3.IsNotFound(err) {
 			logging.Error("multipart abort", "path", rel, "err", err)

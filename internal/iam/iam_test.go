@@ -2,37 +2,42 @@ package iam
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestPoliciesValidJSON(t *testing.T) {
-	pols := map[string][]byte{
-		"group":        GroupPolicy("file-transfer"),
-		"user":         UserPolicy("file-transfer", "alice"),
-		"admin":        AdminPolicy("file-transfer"),
-		"server-data":  ServerDataPolicy("file-transfer"),
-		"server-admin": ServerAdminPolicy("file-transfer"),
+func loadTestPolicies(t *testing.T) *Policies {
+	t.Helper()
+	p, err := LoadPolicies(filepath.Join("..", "..", "policy"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, p := range pols {
+	return p
+}
+
+func TestPoliciesValidJSON(t *testing.T) {
+	p := loadTestPolicies(t)
+	pols := map[string][]byte{
+		"group":        p.Group,
+		"operator":     p.Operator,
+		"server-data":  p.Data,
+		"server-admin": p.Admin,
+	}
+	for name, raw := range pols {
 		var v any
-		if err := json.Unmarshal(p, &v); err != nil {
+		if err := json.Unmarshal(raw, &v); err != nil {
 			t.Fatalf("%s invalid JSON: %v", name, err)
 		}
-		if !strings.Contains(string(p), "s3:") {
+		if !strings.Contains(string(raw), "s3:") {
 			t.Fatalf("%s missing s3 action", name)
 		}
 	}
 }
 
-func TestUserPolicyCannotDeleteUpload(t *testing.T) {
-	p := string(UserPolicy("file-transfer", "alice"))
-	if strings.Contains(p, "s3:DeleteObject") {
-		t.Fatalf("user policy must not allow deleting upload objects: %s", p)
-	}
-}
-
-func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
+func TestUserGroupPolicyUploadScope(t *testing.T) {
+	p := loadTestPolicies(t)
 	var doc struct {
 		Statement []struct {
 			Effect   string
@@ -40,7 +45,145 @@ func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
 			Resource []string
 		}
 	}
-	if err := json.Unmarshal(AdminPolicy("file-transfer"), &doc); err != nil {
+	if err := json.Unmarshal(p.Group, &doc); err != nil {
+		t.Fatal(err)
+	}
+	allowActions := map[string]bool{
+		"s3:PutObject":                true,
+		"s3:AbortMultipartUpload":     true,
+		"s3:ListMultipartUploadParts": true,
+		"s3:PutObjectTagging":         true,
+		"s3:DeleteObject":             true,
+		"s3:DeleteObjectVersion":      true,
+	}
+	seenAllow := map[string]bool{}
+	uploadResource := "arn:aws:s3:::file-transfer/${aws:username}/upload/*"
+	protectResources := map[string]bool{
+		"arn:aws:s3:::file-transfer/${aws:username}/upload/.keep": false,
+		"arn:aws:s3:::file-transfer/${aws:username}/upload/":      false,
+	}
+	for _, st := range doc.Statement {
+		for _, action := range st.Action {
+			if action == "s3:GetObject" || action == "s3:ListAllMyBuckets" || action == "s3:ListBucketMultipartUploads" {
+				t.Fatalf("user group must not grant %s", action)
+			}
+			if !allowActions[action] || st.Effect != "Allow" {
+				continue
+			}
+			seenAllow[action] = true
+			for _, res := range st.Resource {
+				if res != uploadResource {
+					t.Fatalf("%s resource outside upload: %s", action, res)
+				}
+			}
+		}
+		for _, res := range st.Resource {
+			if strings.Contains(res, "/inbound/") || strings.Contains(res, "/outbound/") {
+				t.Fatalf("user group must not grant inbound/outbound access: %s", res)
+			}
+		}
+	}
+	for action := range allowActions {
+		if !seenAllow[action] {
+			t.Fatalf("user group missing upload action %s", action)
+		}
+	}
+	for _, st := range doc.Statement {
+		if st.Effect != "Deny" {
+			continue
+		}
+		for _, action := range st.Action {
+			if action != "s3:DeleteObject" && action != "s3:DeleteObjectVersion" {
+				continue
+			}
+			for _, res := range st.Resource {
+				if _, ok := protectResources[res]; ok {
+					protectResources[res] = true
+				}
+			}
+		}
+	}
+	for res, seen := range protectResources {
+		if !seen {
+			t.Fatalf("user group must deny deleting %s", res)
+		}
+	}
+	text := string(p.Group)
+	for _, want := range []string{
+		"${aws:username}/upload",
+		"${aws:username}/upload/",
+		"${aws:username}/upload/*",
+		"${aws:username}/inbound/",
+		"${aws:username}/outbound/",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("user group missing %q", want)
+		}
+	}
+}
+
+func TestUserGroupCanListOwnDirs(t *testing.T) {
+	p := loadTestPolicies(t)
+	var doc struct {
+		Statement []struct {
+			Effect    string
+			Action    []string
+			Condition map[string]map[string]any
+		}
+	}
+	if err := json.Unmarshal(p.Group, &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"${aws:username}", "${aws:username}/",
+		"${aws:username}/inbound", "${aws:username}/inbound/", "${aws:username}/inbound/*",
+		"${aws:username}/outbound", "${aws:username}/outbound/", "${aws:username}/outbound/*",
+		"${aws:username}/upload", "${aws:username}/upload/", "${aws:username}/upload/*",
+	}
+	allowed := map[string]bool{}
+	for _, st := range doc.Statement {
+		if st.Effect != "Allow" {
+			continue
+		}
+		isList := false
+		for _, a := range st.Action {
+			if a == "s3:ListBucket" {
+				isList = true
+			}
+		}
+		if !isList {
+			continue
+		}
+		for _, w := range want {
+			if hasPrefixValue(st.Condition["StringLike"]["s3:prefix"], w) {
+				allowed[w] = true
+			}
+		}
+	}
+	for _, w := range want {
+		if !allowed[w] {
+			t.Fatalf("user group ListBucket missing prefix %q", w)
+		}
+	}
+}
+
+func TestOperatorPolicyHasNoAdminActions(t *testing.T) {
+	p := loadTestPolicies(t)
+	if strings.Contains(string(p.Operator), "admin:") {
+		t.Fatal("operator policy must not contain admin actions")
+	}
+}
+
+func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
+	p := loadTestPolicies(t)
+	var doc struct {
+		Statement []struct {
+			Effect   string
+			Action   []string
+			Resource []string
+		}
+	}
+	if err := json.Unmarshal(p.Operator, &doc); err != nil {
 		t.Fatal(err)
 	}
 	var allowDelete, denyKeep bool
@@ -79,6 +222,7 @@ func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
 }
 
 func TestOperatorPolicyAllowsRecursiveInboundList(t *testing.T) {
+	p := loadTestPolicies(t)
 	var doc struct {
 		Statement []struct {
 			Effect    string
@@ -86,7 +230,7 @@ func TestOperatorPolicyAllowsRecursiveInboundList(t *testing.T) {
 			Condition map[string]map[string]any
 		}
 	}
-	if err := json.Unmarshal(AdminPolicy("file-transfer"), &doc); err != nil {
+	if err := json.Unmarshal(p.Operator, &doc); err != nil {
 		t.Fatal(err)
 	}
 	var allowRecursive, denyExcludesInbound bool
@@ -130,30 +274,100 @@ func hasPrefixValue(v any, want string) bool {
 }
 
 func TestOperatorPolicyRestrictsUploadDir(t *testing.T) {
-	p := string(AdminPolicy("file-transfer"))
+	p := loadTestPolicies(t)
+	text := string(p.Operator)
 	for _, want := range []string{"s3:delimiter", "*/upload/", `"Deny"`} {
-		if !strings.Contains(p, want) {
-			t.Fatalf("operator policy missing %q: %s", want, p)
+		if !strings.Contains(text, want) {
+			t.Fatalf("operator policy missing %q: %s", want, text)
 		}
 	}
 }
 
 func TestServerDataPolicyKeepsPlaceholders(t *testing.T) {
-	p := string(ServerDataPolicy("file-transfer"))
+	p := loadTestPolicies(t)
+	text := string(p.Data)
 	for _, want := range []string{"*/inbound/.keep", "*/outbound/.keep", "*/upload/.keep"} {
-		if !strings.Contains(p, want) {
-			t.Fatalf("missing %s in %s", want, p)
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %s in %s", want, text)
+		}
+	}
+}
+
+func TestLoadPoliciesMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, policyServerAdmin)
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyServerAdmin) {
+		t.Fatalf("期望缺少 %s 的错误，得到 %v", policyServerAdmin, err)
+	}
+}
+
+func TestLoadPoliciesInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(`{"Version":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyUserGroupFile) {
+		t.Fatalf("期望 %s JSON 错误，得到 %v", policyUserGroupFile, err)
+	}
+}
+
+func TestLoadPoliciesUnknownPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/{{other}}/*"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+		t.Fatalf("期望未知占位符错误，得到 %v", err)
+	}
+}
+
+func TestLoadPoliciesResidualBrace(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	bad := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/user}}/*"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+		t.Fatalf("期望残留占位符错误，得到 %v", err)
+	}
+}
+
+func TestLoadPoliciesEmptyDir(t *testing.T) {
+	if _, err := LoadPolicies(t.TempDir()); err == nil {
+		t.Fatal("空目录应返回错误")
+	}
+}
+
+func writeValidPolicies(t *testing.T, dir, skip string) {
+	t.Helper()
+	plain := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/*"]}]}`
+	files := map[string]string{
+		policyUserGroupFile:  plain,
+		policyOperatorFile:   plain,
+		policyServerDataFile: plain,
+		policyServerAdmin:    plain,
+	}
+	for name, content := range files {
+		if name == skip {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
 
 func TestIsSystemUser(t *testing.T) {
-	for _, name := range []string{"ft-data", "ft-admin", "ft-operator", "ft-server-data", "ft-server-admin", "ft-copy-out"} {
+	for _, name := range []string{"ft-data", "ft-admin", "ft-server-data", "ft-server-admin", "ft-copy-out"} {
 		if !IsSystemUser(name) {
 			t.Fatalf("%s should be a system user", name)
 		}
 	}
-	for _, name := range []string{"alice", "fanyu", "ft-user-group"} {
+	for _, name := range []string{"alice", "fanyu", "ft-operator", "ft-user-group"} {
 		if IsSystemUser(name) {
 			t.Fatalf("%s should not be a system user", name)
 		}

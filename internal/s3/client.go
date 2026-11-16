@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +20,12 @@ type Manager struct {
 	Client *minio.Client
 	Core   minio.Core
 	Bucket string
+
+	host      string
+	accessKey string
+	secretKey string
+	secure    bool
+	region    string
 }
 
 func New(endpoint, ak, sk, region string, bucket string) (*Manager, error) {
@@ -32,29 +39,136 @@ func New(endpoint, ak, sk, region string, bucket string) (*Manager, error) {
 		region = "us-east-1"
 	}
 	c, err := minio.New(host, &minio.Options{
-		Creds:  credentials.NewStaticV4(ak, sk, ""),
-		Secure: secure,
-		Region: region,
+		Creds:        credentials.NewStaticV4(ak, sk, ""),
+		Secure:       secure,
+		Region:       region,
+		BucketLookup: minio.BucketLookupPath,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{Client: c, Core: minio.Core{Client: c}, Bucket: bucket}, nil
+	return &Manager{
+		Client: c, Core: minio.Core{Client: c}, Bucket: bucket,
+		host: host, accessKey: ak, secretKey: sk, secure: secure, region: region,
+	}, nil
+}
+
+func (m *Manager) useRegion(region string) error {
+	c, err := minio.New(m.host, &minio.Options{
+		Creds:        credentials.NewStaticV4(m.accessKey, m.secretKey, ""),
+		Secure:       m.secure,
+		Region:       region,
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		return err
+	}
+	m.Client = c
+	m.Core = minio.Core{Client: c}
+	m.region = region
+	return nil
+}
+
+func (m *Manager) useHTTPS() error {
+	if m.secure {
+		return nil
+	}
+	host := m.host
+	if h, p, err := net.SplitHostPort(host); err == nil && p == "80" {
+		host = h
+	}
+	c, err := minio.New(host, &minio.Options{
+		Creds:        credentials.NewStaticV4(m.accessKey, m.secretKey, ""),
+		Secure:       true,
+		Region:       m.region,
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		return err
+	}
+	m.Client = c
+	m.Core = minio.Core{Client: c}
+	m.host = host
+	m.secure = true
+	return nil
+}
+
+// recoverRedirect 根据 301 尝试切换到 HTTPS 和/或服务端返回的 region。
+func (m *Manager) recoverRedirect(err error) bool {
+	changed := false
+	if !m.secure {
+		if herr := m.useHTTPS(); herr == nil {
+			changed = true
+		}
+	}
+	resp := minio.ToErrorResponse(err)
+	if resp.Region != "" && resp.Region != m.region {
+		if rerr := m.useRegion(resp.Region); rerr == nil {
+			changed = true
+		}
+	}
+	return changed
 }
 
 // EnsureBucket 保证桶存在。BucketExists 失败时不影响后续创建尝试；
-// 创建时已存在则视为成功。
+// 创建时已存在则视为成功。遇到 HTTP→HTTPS 或 region 重定向时自动重试。
 func (m *Manager) EnsureBucket(ctx context.Context) error {
-	if ok, _ := m.Client.BucketExists(ctx, m.Bucket); ok {
-		return nil
-	}
-	if err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: "us-east-1"}); err != nil {
-		if isBucketAlreadyExists(err) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		ok, existsErr := m.Client.BucketExists(ctx, m.Bucket)
+		if ok {
 			return nil
+		}
+		if isPermanentRedirect(existsErr) {
+			lastErr = existsErr
+			if m.recoverRedirect(existsErr) {
+				continue
+			}
+			return m.redirectError(existsErr)
+		}
+		err := m.Client.MakeBucket(ctx, m.Bucket, minio.MakeBucketOptions{Region: m.region})
+		if err == nil || isBucketAlreadyExists(err) {
+			return nil
+		}
+		if isPermanentRedirect(err) {
+			lastErr = err
+			if m.recoverRedirect(err) {
+				continue
+			}
+			return m.redirectError(err)
 		}
 		return err
 	}
+	if lastErr != nil {
+		return m.redirectError(lastErr)
+	}
 	return nil
+}
+
+func isPermanentRedirect(err error) bool {
+	if err == nil {
+		return false
+	}
+	resp := minio.ToErrorResponse(err)
+	if resp.StatusCode == http.StatusMovedPermanently || resp.Code == "PermanentRedirect" {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "permanent redirect") || strings.Contains(low, "status code: 301")
+}
+
+func (m *Manager) redirectError(err error) error {
+	resp := minio.ToErrorResponse(err)
+	scheme := "http"
+	if m.secure {
+		scheme = "https"
+	}
+	hint := fmt.Sprintf("创建桶 %s 返回 PermanentRedirect：请检查 s3.endpoint=%s://%s 是否应使用 https，以及 s3.region=%s 是否与 bucket 所在区域一致",
+		m.Bucket, scheme, m.host, m.region)
+	if resp.Region != "" {
+		hint += fmt.Sprintf("（服务端 region=%s）", resp.Region)
+	}
+	return fmt.Errorf("%s", hint)
 }
 
 func isBucketAlreadyExists(err error) bool {

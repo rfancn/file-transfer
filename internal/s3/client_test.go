@@ -74,3 +74,43 @@ func TestGetRangeIncludesZeroStart(t *testing.T) {
 		}
 	}
 }
+
+func TestPermanentRedirectClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"status code", minio.ErrorResponse{Code: "PermanentRedirect", StatusCode: http.StatusMovedPermanently}},
+		{"error code", minio.ErrorResponse{Code: "PermanentRedirect"}},
+		{"plain text", errors.New("Permanent Redirect")},
+		{"status text", errors.New("status code: 301")},
+	}
+	for _, tc := range cases {
+		if !isPermanentRedirect(tc.err) {
+			t.Fatalf("%s should be classified as permanent redirect", tc.name)
+		}
+	}
+	if isPermanentRedirect(nil) || isPermanentRedirect(errors.New("no such bucket")) {
+		t.Fatal("non-redirect errors must not match")
+	}
+}
+
+func TestUseHTTPSNormalizesPort80(t *testing.T) {
+	m := &Manager{host: "s3.example.com:80", accessKey: "a", secretKey: "b", region: "us-east-1"}
+	if err := m.useHTTPS(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.secure || m.host != "s3.example.com" {
+		t.Fatalf("secure=%v host=%q", m.secure, m.host)
+	}
+}
+
+func TestRecoverRedirectUpgradesHTTP(t *testing.T) {
+	m := &Manager{host: "s3.example.com", accessKey: "a", secretKey: "b", region: "us-east-1"}
+	if !m.recoverRedirect(minio.ErrorResponse{Code: "PermanentRedirect", StatusCode: http.StatusMovedPermanently}) {
+		t.Fatal("expected redirect recovery")
+	}
+	if !m.secure {
+		t.Fatal("expected HTTPS upgrade")
+	}
+}

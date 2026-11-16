@@ -1,12 +1,19 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/limiter"
+	"github.com/rfancn/file-transfer/internal/protocol"
+	"github.com/rfancn/file-transfer/internal/server/app"
 )
 
 func TestParseRangeHeaderIfRange(t *testing.T) {
@@ -82,5 +89,110 @@ func TestWildcardPath(t *testing.T) {
 	}
 	if got, want := rr.Body.String(), "inbound/a b/c#d.txt"; got != want {
 		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+func TestDownloadReturnsBusy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rt := config.Runtime{Limits: config.Limits{
+		Enabled:              true,
+		MaxConcurrent:        1,
+		MaxConcurrentPerUser: 1,
+		QueueTimeout:         10 * time.Millisecond,
+	}}
+	lim := limiter.New(rt.Limits)
+	defer lim.Close()
+
+	release, err := lim.AcquireTransfer(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	h := &Handler{App: &app.App{Limits: lim, RT: rt}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/files/inbound/a.bin", nil)
+	c.Set("username", "alice")
+	c.Params = gin.Params{{Key: "path", Value: "/inbound/a.bin"}}
+
+	h.Download(c)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d，期望 429", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q，期望 1", got)
+	}
+	var body protocol.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析响应体失败: %v", err)
+	}
+	if body.Error != "server_busy" {
+		t.Fatalf("error = %q，期望 server_busy", body.Error)
+	}
+}
+
+func TestListReturnsBusy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rt := config.Runtime{Limits: config.Limits{
+		Enabled:              true,
+		MaxConcurrent:        1,
+		MaxConcurrentPerUser: 1,
+		QueueTimeout:         10 * time.Millisecond,
+	}}
+	lim := limiter.New(rt.Limits)
+	defer lim.Close()
+
+	// 占满全部元数据槽。
+	for i := 0; i < 8; i++ {
+		release, err := lim.AcquireMetadata(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+	}
+
+	h := &Handler{App: &app.App{Limits: lim, RT: rt}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/files?dir=inbound", nil)
+	c.Set("username", "alice")
+
+	h.List(c)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d，期望 429", w.Code)
+	}
+}
+
+func TestUploadReturnsBusy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rt := config.Runtime{Limits: config.Limits{
+		Enabled:              true,
+		MaxConcurrent:        1,
+		MaxConcurrentPerUser: 1,
+		QueueTimeout:         10 * time.Millisecond,
+	}}
+	lim := limiter.New(rt.Limits)
+	defer lim.Close()
+
+	release, err := lim.AcquireTransfer(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	h := &Handler{App: &app.App{Limits: lim, RT: rt}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPut, "/v1/files/outbound/a.bin", strings.NewReader("x"))
+	c.Set("username", "alice")
+	c.Params = gin.Params{{Key: "path", Value: "/outbound/a.bin"}}
+
+	h.Upload(c)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d，期望 429", w.Code)
 	}
 }

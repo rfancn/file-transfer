@@ -14,6 +14,7 @@ require (
 	github.com/minio/minio-go/v7 v7.4.1
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
+	golang.org/x/time v0.16.0
 )
 
 require (

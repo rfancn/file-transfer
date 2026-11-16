@@ -79,10 +79,15 @@ func TestAddUser(t *testing.T) {
 		}
 		gotAuth = r.Header.Get("Authorization")
 		var req struct {
-			Username string `json:"username"`
+			Username        string `json:"username"`
+			Group           string `json:"group"`
+			ConfirmOperator bool   `json:"confirm_operator"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		gotUsername = req.Username
+		if req.Group != "ft-operator-group" || !req.ConfirmOperator {
+			t.Errorf("group=%q confirm=%t", req.Group, req.ConfirmOperator)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"username": req.Username, "password": "generated"})
@@ -94,7 +99,7 @@ func TestAddUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.token = "admin-token"
-	res, err := c.AddUser(context.Background(), "alice")
+	res, err := c.AddUser(context.Background(), "alice", "ft-operator-group", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,16 +6,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
 	osuser "os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rfancn/file-transfer/internal/config"
 	"github.com/rfancn/file-transfer/internal/protocol"
+)
+
+const (
+	maxRetryAttempts = 6
+	maxRetryWait     = 5 * time.Minute
+	retryBaseWait    = time.Second
 )
 
 type APIError struct {
@@ -46,6 +54,7 @@ type Client struct {
 	policy     protocol.UploadPolicy
 	clientUser string
 	clientHost string
+	retryLog   io.Writer
 	mu         sync.Mutex
 }
 
@@ -66,8 +75,8 @@ func New(cfg config.ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server.url 无效: %w", err)
 	}
-	if u.Scheme != "http" {
-		return nil, fmt.Errorf("server.url 必须是 http://（客户端与服务端在同一局域网，不使用 HTTPS）")
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("server.url 必须是 http:// 或 https://")
 	}
 	clientUser, clientHost := localClientInfo()
 	return &Client{
@@ -75,6 +84,7 @@ func New(cfg config.ClientConfig) (*Client, error) {
 		http:       &http.Client{},
 		clientUser: clientUser,
 		clientHost: clientHost,
+		retryLog:   os.Stderr,
 	}, nil
 }
 
@@ -198,32 +208,132 @@ func (c *Client) execute(req *http.Request, getBody func() (io.ReadCloser, error
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		return resp, nil
-	}
-	// token 失效时用内存中的密码自动重登并重试一次。
-	c.mu.Lock()
-	username, password := c.username, c.password
-	c.mu.Unlock()
-	if username == "" || password == "" {
-		return resp, nil
-	}
-	resp.Body.Close()
-	if err := c.Login(req.Context(), username, password); err != nil {
-		return nil, err
-	}
-	retry := req.Clone(req.Context())
-	retry.Header.Set("Authorization", "Bearer "+c.token)
-	if getBody != nil {
-		rc, err := getBody()
+	if resp.StatusCode == http.StatusUnauthorized {
+		// token 失效时用内存中的密码自动重登并重试一次。
+		c.mu.Lock()
+		username, password := c.username, c.password
+		c.mu.Unlock()
+		if username == "" || password == "" {
+			return resp, nil
+		}
+		resp.Body.Close()
+		if err := c.Login(req.Context(), username, password); err != nil {
+			return nil, err
+		}
+		req, err = replayRequest(req, getBody)
 		if err != nil {
 			return nil, err
 		}
-		retry.Body = rc
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.retryBusy(req, getBody, resp)
+}
+
+func (c *Client) retryBusy(req *http.Request, getBody func() (io.ReadCloser, error), resp *http.Response) (*http.Response, error) {
+	var waited time.Duration
+	for attempt := 1; ; attempt++ {
+		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+			return resp, nil
+		}
+		wait := retryWait(resp, attempt)
+		if attempt >= maxRetryAttempts || waited+wait > maxRetryWait {
+			return resp, nil
+		}
+		// 先排空少量响应体再关闭，便于连接复用。
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		retryNotice(c.retryLog, wait)
+		if err := sleepContext(req.Context(), wait); err != nil {
+			return nil, err
+		}
+		next, err := replayRequest(req, getBody)
+		if err != nil {
+			return nil, err
+		}
+		resp, err = c.http.Do(next)
+		if err != nil {
+			return nil, err
+		}
+		req = next
+		waited += wait
+	}
+}
+
+func replayRequest(req *http.Request, getBody func() (io.ReadCloser, error)) (*http.Request, error) {
+	if getBody == nil {
+		getBody = req.GetBody
+	}
+	next := req.Clone(req.Context())
+	if getBody != nil {
+		body, err := getBody()
+		if err != nil {
+			return nil, err
+		}
+		next.Body = body
 	} else if req.Body != nil {
 		return nil, fmt.Errorf("请求体不可重放，请重试")
 	}
-	return c.http.Do(retry)
+	return next, nil
+}
+
+func retryWait(resp *http.Response, attempt int) time.Duration {
+	if v := strings.TrimSpace(resp.Header.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+			// 防止秒数过大导致乘法溢出。
+			if secs > int(maxRetryWait/time.Second) {
+				return maxRetryWait
+			}
+			return time.Duration(secs) * time.Second
+		}
+		if t, err := http.ParseTime(v); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+			return 0
+		}
+	}
+	shift := attempt - 1
+	if shift > 5 {
+		shift = 5
+	}
+	base := retryBaseWait * time.Duration(1<<shift)
+	jitter := time.Duration(rand.Int63n(int64(500 * time.Millisecond)))
+	return base + jitter
+}
+
+// retryNotice 在重试等待前提示用户，避免误以为命令卡住。
+func retryNotice(w io.Writer, wait time.Duration) {
+	if w == nil {
+		return
+	}
+	if wait > 0 {
+		// 向上取整且至少 1 秒，避免亚秒等待显示为 0 秒。
+		secs := int64((wait + time.Second - 1) / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		_, _ = fmt.Fprintf(w, "服务器繁忙，等待 %d 秒后重试\n", secs)
+		return
+	}
+	_, _ = fmt.Fprintln(w, "服务器繁忙，正在重试")
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body io.Reader, size int64, contentType string, out any) error {

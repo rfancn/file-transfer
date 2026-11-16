@@ -1,0 +1,107 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "admin:CreateUser",
+        "admin:DeleteUser",
+        "admin:GetUser",
+        "admin:ListUsers",
+        "admin:AddUserToGroup",
+        "admin:RemoveUserFromGroup",
+        "admin:CreatePolicy",
+        "admin:DeletePolicy",
+        "admin:AttachUserOrGroupPolicy",
+        "admin:ListUserPolicies",
+        "admin:GetGroup",
+        "admin:ListGroups"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListMultipartUploadParts",
+        "s3:AbortMultipartUpload"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/inbound/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/outbound/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/upload/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/inbound/"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/outbound/"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::file-transfer/*/upload/"
+      ]
+    }
+  ],
+  "Version": "2012-10-17"
+}

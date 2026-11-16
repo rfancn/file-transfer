@@ -77,11 +77,6 @@ func (s *Store) Verify(username, password string) bool {
 }
 
 func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.users, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -96,7 +91,11 @@ func (s *Store) save() error {
 		f.Close()
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
+	// 关闭 HTML 转义，避免密码中的 & < > 被写成 \uXXXX。
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(s.users); err != nil {
 		f.Close()
 		return err
 	}
