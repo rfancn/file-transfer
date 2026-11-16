@@ -25,6 +25,11 @@ func (h *Handler) List(c *gin.Context) {
 		response.Err(c, http.StatusBadRequest, "invalid_request", "dir 只允许 inbound、outbound 或 upload")
 		return
 	}
+	release, ok := h.acquireMetadata(c)
+	if !ok {
+		return
+	}
+	defer release()
 	files, err := h.Data.List(c.Request.Context(), username+"/"+dir+"/")
 	if err != nil {
 		logging.Error("list", "username", username, "dir", dir, "err", err)
@@ -43,6 +48,11 @@ func (h *Handler) Download(c *gin.Context) {
 		return
 	}
 	key := username + "/" + rel
+	release, ok := h.acquireTransfer(c, username)
+	if !ok {
+		return
+	}
+	defer release()
 	stat, err := h.Data.Stat(c.Request.Context(), key)
 	if err != nil {
 		if s3.IsNotFound(err) {
@@ -98,7 +108,7 @@ func (h *Handler) Download(c *gin.Context) {
 		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size, 10))
 		w.WriteHeader(http.StatusOK)
 	}
-	_, err = io.Copy(w, obj)
+	_, err = io.CopyBuffer(w, h.wrapDownload(c, obj, username), make([]byte, copyBufferSize))
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logging.Error("download copy", "key", key, "err", err)
 	}
@@ -116,7 +126,15 @@ func (h *Handler) Upload(c *gin.Context) {
 		return
 	}
 	key := username + "/" + rel
-	if err := h.Data.Put(c.Request.Context(), key, c.Request.Body, c.Request.ContentLength); err != nil {
+	release, ok := h.acquireTransfer(c, username)
+	if !ok {
+		return
+	}
+	defer release()
+	if err := h.Data.Put(c.Request.Context(), key, h.wrapUpload(c, c.Request.Body, username), c.Request.ContentLength); err != nil {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		logging.Error("upload", "key", key, "err", err)
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "上传失败，RustFS 服务不可用")
 		return
