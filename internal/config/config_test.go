@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSize(t *testing.T) {
@@ -329,7 +330,7 @@ func TestLogConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"[log]", "max_age_days = 30", "max_backups = 30", "max_size_mb = 100", "compress = true", "  listen = ", "  log_file = ", "[retention]", "inbound_days = 3"} {
+	for _, want := range []string{"[log]", "max_age_days = 30", "max_backups = 30", "max_size_mb = 100", "compress = true", "  listen = ", "  log_file = ", "[retention]", "inbound_days = 3", "[limits]", "max_concurrent = 4", "queue_timeout = \"10s\""} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("生成的配置缺少 %q: %s", want, content)
 		}
@@ -376,5 +377,60 @@ func TestPartSizeDefaults(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("size %d: got %d want %d", c.size, got, c.want)
 		}
+	}
+}
+
+func TestLimitsDefaults(t *testing.T) {
+	cfg := DefaultServer()
+	if !cfg.Limits.Enabled {
+		t.Fatal("limits.enabled 默认应为 true")
+	}
+	if cfg.Limits.MaxConcurrent != 4 || cfg.Limits.MaxConcurrentPerUser != 1 {
+		t.Fatalf("并发默认值 = %+v", cfg.Limits)
+	}
+
+	cfg.Auth.TokenSecret = "x"
+	cfg.Auth.UploadSecret = "y"
+	cfg.S3.Endpoint = "http://127.0.0.1:9000"
+	rt, err := cfg.Runtime("test.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Limits.GlobalReadBPS != 0 || rt.Limits.GlobalWriteBPS != 0 ||
+		rt.Limits.PerUserReadBPS != 0 || rt.Limits.PerUserWriteBPS != 0 {
+		t.Fatalf("bps 默认值应为 0: %+v", rt.Limits)
+	}
+	if rt.Limits.QueueTimeout != 10*time.Second {
+		t.Fatalf("queue_timeout = %v，期望 10s", rt.Limits.QueueTimeout)
+	}
+}
+
+func TestLimitsValidation(t *testing.T) {
+	base := DefaultServer()
+	base.Auth.TokenSecret = "x"
+	base.Auth.UploadSecret = "y"
+	base.S3.Endpoint = "http://127.0.0.1:9000"
+
+	cases := []struct {
+		name   string
+		mutate func(*ServerConfig)
+	}{
+		{"全局并发为 0", func(c *ServerConfig) { c.Limits.MaxConcurrent = 0 }},
+		{"单用户并发为 0", func(c *ServerConfig) { c.Limits.MaxConcurrentPerUser = 0 }},
+		{"单用户并发大于全局", func(c *ServerConfig) { c.Limits.MaxConcurrentPerUser = 5 }},
+		{"读带宽太小", func(c *ServerConfig) { c.Limits.GlobalReadBPS = "32KiB" }},
+		{"写带宽为负", func(c *ServerConfig) { c.Limits.GlobalWriteBPS = "-1" }},
+		{"排队超时太短", func(c *ServerConfig) { c.Limits.QueueTimeout = "500ms" }},
+		{"排队超时太长", func(c *ServerConfig) { c.Limits.QueueTimeout = "2m" }},
+		{"排队超时格式错误", func(c *ServerConfig) { c.Limits.QueueTimeout = "abc" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			tc.mutate(&cfg)
+			if _, err := cfg.Runtime("test.toml"); err == nil {
+				t.Fatal("期望配置校验失败")
+			}
+		})
 	}
 }

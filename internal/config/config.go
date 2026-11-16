@@ -60,6 +60,18 @@ type MultipartSection struct {
 	Tiers     []MultipartTier `toml:"tiers"`
 }
 
+// LimitsSection 是应用层 I/O 限速配置。
+type LimitsSection struct {
+	Enabled              bool   `toml:"enabled"`
+	MaxConcurrent        int    `toml:"max_concurrent"`
+	MaxConcurrentPerUser int    `toml:"max_concurrent_per_user"`
+	GlobalReadBPS        string `toml:"global_read_bps"`
+	GlobalWriteBPS       string `toml:"global_write_bps"`
+	PerUserReadBPS       string `toml:"per_user_read_bps"`
+	PerUserWriteBPS      string `toml:"per_user_write_bps"`
+	QueueTimeout         string `toml:"queue_timeout"`
+}
+
 type LogSection struct {
 	MaxAgeDays int  `toml:"max_age_days"`
 	MaxBackups int  `toml:"max_backups"`
@@ -72,6 +84,7 @@ type ServerConfig struct {
 	S3        S3Section        `toml:"s3"`
 	Auth      AuthSection      `toml:"auth"`
 	Multipart MultipartSection `toml:"multipart"`
+	Limits    LimitsSection    `toml:"limits"`
 	Retention RetentionSection `toml:"retention"`
 	Log       LogSection       `toml:"log"`
 }
@@ -143,8 +156,21 @@ type Runtime struct {
 	DirectMax    int64
 	MaxPart      int64
 	Tiers        []Tier
+	Limits       Limits
 	ConfigPath   string
 	Config       ServerConfig
+}
+
+// Limits 是解析后的应用层限速配置。
+type Limits struct {
+	Enabled              bool
+	MaxConcurrent        int
+	MaxConcurrentPerUser int
+	GlobalReadBPS        int64
+	GlobalWriteBPS       int64
+	PerUserReadBPS       int64
+	PerUserWriteBPS      int64
+	QueueTimeout         time.Duration
 }
 
 type Tier struct {
@@ -174,6 +200,16 @@ func DefaultServer() ServerConfig {
 				{Max: "625GiB", Part: "64MiB"},
 				{Max: "1.25TiB", Part: "128MiB"},
 			},
+		},
+		Limits: LimitsSection{
+			Enabled:              true,
+			MaxConcurrent:        4,
+			MaxConcurrentPerUser: 1,
+			GlobalReadBPS:        "0",
+			GlobalWriteBPS:       "0",
+			PerUserReadBPS:       "0",
+			PerUserWriteBPS:      "0",
+			QueueTimeout:         "10s",
 		},
 		Retention: RetentionSection{
 			InboundDays: 3, OutboundDays: 0, UploadDays: 3, IncompleteDays: 3,
@@ -267,6 +303,40 @@ func LoadServer(path string) (ServerConfig, error) {
 func (c ServerConfig) Runtime(path string) (Runtime, error) {
 	rt := Runtime{ConfigPath: path, Config: c}
 	var err error
+	rt.Limits = Limits{
+		Enabled:              c.Limits.Enabled,
+		MaxConcurrent:        c.Limits.MaxConcurrent,
+		MaxConcurrentPerUser: c.Limits.MaxConcurrentPerUser,
+	}
+	if rt.Limits.MaxConcurrent < 1 {
+		return rt, errors.New("limits.max_concurrent 必须大于 0")
+	}
+	if rt.Limits.MaxConcurrentPerUser < 1 || rt.Limits.MaxConcurrentPerUser > rt.Limits.MaxConcurrent {
+		return rt, errors.New("limits.max_concurrent_per_user 必须在 1 和 max_concurrent 之间")
+	}
+	rt.Limits.GlobalReadBPS, err = parseBPS(c.Limits.GlobalReadBPS, "limits.global_read_bps")
+	if err != nil {
+		return rt, err
+	}
+	rt.Limits.GlobalWriteBPS, err = parseBPS(c.Limits.GlobalWriteBPS, "limits.global_write_bps")
+	if err != nil {
+		return rt, err
+	}
+	rt.Limits.PerUserReadBPS, err = parseBPS(c.Limits.PerUserReadBPS, "limits.per_user_read_bps")
+	if err != nil {
+		return rt, err
+	}
+	rt.Limits.PerUserWriteBPS, err = parseBPS(c.Limits.PerUserWriteBPS, "limits.per_user_write_bps")
+	if err != nil {
+		return rt, err
+	}
+	rt.Limits.QueueTimeout, err = time.ParseDuration(c.Limits.QueueTimeout)
+	if err != nil {
+		return rt, fmt.Errorf("limits.queue_timeout: %w", err)
+	}
+	if rt.Limits.QueueTimeout < time.Second || rt.Limits.QueueTimeout > time.Minute {
+		return rt, errors.New("limits.queue_timeout 必须在 1s～60s 之间")
+	}
 	rt.TokenTTL, err = time.ParseDuration(c.Auth.TokenTTL)
 	if err != nil {
 		return rt, fmt.Errorf("auth.token_ttl: %w", err)
@@ -331,6 +401,17 @@ func (rt Runtime) PartSize(size int64) (int64, error) {
 		part = 5 << 30
 	}
 	return part, nil
+}
+
+func parseBPS(s, field string) (int64, error) {
+	v, err := ParseSize(s)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", field, err)
+	}
+	if v != 0 && v < 64<<10 {
+		return 0, fmt.Errorf("%s 必须为 0 或至少 64KiB", field)
+	}
+	return v, nil
 }
 
 func ParseSize(s string) (int64, error) {
@@ -469,6 +550,10 @@ func SaveServerConfig(path string, cfg ServerConfig) error {
 	for _, t := range cfg.Multipart.Tiers {
 		fmt.Fprintf(&b, "\n  [[multipart.tiers]]\n    max = %q\n    part = %q\n", t.Max, t.Part)
 	}
+	fmt.Fprintf(&b, "\n[limits]\n  enabled = %t\n  max_concurrent = %d\n  max_concurrent_per_user = %d\n  global_read_bps = %q\n  global_write_bps = %q\n  per_user_read_bps = %q\n  per_user_write_bps = %q\n  queue_timeout = %q\n",
+		cfg.Limits.Enabled, cfg.Limits.MaxConcurrent, cfg.Limits.MaxConcurrentPerUser,
+		cfg.Limits.GlobalReadBPS, cfg.Limits.GlobalWriteBPS,
+		cfg.Limits.PerUserReadBPS, cfg.Limits.PerUserWriteBPS, cfg.Limits.QueueTimeout)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
