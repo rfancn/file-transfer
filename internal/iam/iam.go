@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -55,6 +56,7 @@ type Manager struct {
 	Admin         *madmin.AdminClient
 	S3            *s3.Manager
 	PlaceholderS3 *s3.Manager
+	Policies      *Policies
 	Bucket        string
 }
 
@@ -285,6 +287,9 @@ func (m *Manager) DirExists(ctx context.Context, user, dir string) (bool, error)
 }
 
 func (m *Manager) SetupUser(ctx context.Context, user, password string) (bool, error) {
+	if m.Policies == nil {
+		return false, errors.New("IAM 策略未加载")
+	}
 	exists, err := m.UserExists(ctx, user)
 	if err != nil {
 		return false, err
@@ -295,13 +300,17 @@ func (m *Manager) SetupUser(ctx context.Context, user, password string) (bool, e
 		}
 	}
 	polName := UserPolicyName(user)
-	if err := m.ReplacePolicy(ctx, polName, UserPolicy(m.Bucket, user), []string{user}, nil); err != nil {
+	userPolicy, err := m.Policies.UserPolicy(user)
+	if err != nil {
+		return !exists, err
+	}
+	if err := m.ReplacePolicy(ctx, polName, userPolicy, []string{user}, nil); err != nil {
 		return !exists, err
 	}
 	if err := m.AddToGroup(ctx, UserGroup, user); err != nil {
 		return !exists, err
 	}
-	if err := m.ReplacePolicy(ctx, UserGroupPol, GroupPolicy(m.Bucket), nil, []string{UserGroup}); err != nil {
+	if err := m.ReplacePolicy(ctx, UserGroupPol, m.Policies.Group, nil, []string{UserGroup}); err != nil {
 		return !exists, err
 	}
 	if err := m.CreatePlaceholders(ctx, user); err != nil {
@@ -335,22 +344,28 @@ func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error
 }
 
 func (m *Manager) EnsureServiceIdentities(ctx context.Context, dataUser, dataPass, adminUser, adminPass string) error {
+	if m.Policies == nil {
+		return errors.New("IAM 策略未加载")
+	}
 	if err := m.CreateUser(ctx, dataUser, dataPass); err != nil {
 		return err
 	}
 	if err := m.CreateUser(ctx, adminUser, adminPass); err != nil {
 		return err
 	}
-	if err := m.ReplacePolicy(ctx, DataPolicy, ServerDataPolicy(m.Bucket), []string{dataUser}, nil); err != nil {
+	if err := m.ReplacePolicy(ctx, DataPolicy, m.Policies.Data, []string{dataUser}, nil); err != nil {
 		return err
 	}
-	if err := m.ReplacePolicy(ctx, ServerAdminPol, ServerAdminPolicy(m.Bucket), []string{adminUser}, nil); err != nil {
+	if err := m.ReplacePolicy(ctx, ServerAdminPol, m.Policies.Admin, []string{adminUser}, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (m *Manager) EnsureAdminConsole(ctx context.Context, password string) (bool, error) {
+	if m.Policies == nil {
+		return false, errors.New("IAM 策略未加载")
+	}
 	exists, err := m.UserExists(ctx, ConsoleAdmin)
 	if err != nil {
 		return false, err
@@ -361,7 +376,7 @@ func (m *Manager) EnsureAdminConsole(ctx context.Context, password string) (bool
 		}
 	}
 	_ = m.AddToGroup(ctx, AdminGroup, ConsoleAdmin)
-	if err := m.ReplacePolicy(ctx, AdminGroupPol, AdminPolicy(m.Bucket), []string{ConsoleAdmin}, []string{AdminGroup}); err != nil {
+	if err := m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, []string{ConsoleAdmin}, []string{AdminGroup}); err != nil {
 		return false, err
 	}
 	return !exists, nil
@@ -387,163 +402,6 @@ func (m *Manager) RemoveIncomplete(ctx context.Context, olderThan time.Duration)
 		count++
 	}
 	return count, nil
-}
-
-func mustJSON(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
-
-func policy(actions []string, resource string) map[string]any {
-	return map[string]any{"Effect": "Allow", "Action": actions, "Resource": []string{resource}}
-}
-
-func GroupPolicy(bucket string) []byte {
-	return mustJSON(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			policy([]string{"s3:ListAllMyBuckets"}, "arn:aws:s3:::*"),
-			policy([]string{"s3:HeadBucket", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:GetBucketPolicyStatus", "s3:GetBucketVersioning", "s3:GetBucketObjectLockConfiguration", "s3:GetBucketTagging"}, "arn:aws:s3:::"+bucket),
-			map[string]any{
-				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{"StringLikeIfExists": map[string]any{"s3:prefix": []string{
-					"", "${aws:username}/", "${aws:username}/*", "${aws:username}/inbound/", "${aws:username}/inbound/*",
-					"${aws:username}/outbound/", "${aws:username}/outbound/*", "${aws:username}/upload/", "${aws:username}/upload/*",
-				}}},
-			},
-		},
-	})
-}
-
-func listPrefixStatement(bucket, user string) map[string]any {
-	return map[string]any{
-		"Effect":   "Allow",
-		"Action":   []string{"s3:ListBucket"},
-		"Resource": []string{"arn:aws:s3:::" + bucket},
-		"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{
-			user + "/", user + "/*", user + "/inbound/", user + "/inbound/*",
-			user + "/outbound/", user + "/outbound/*", user + "/upload/", user + "/upload/*",
-		}}},
-	}
-}
-
-func UserPolicy(bucket, user string) []byte {
-	getActions := []string{"s3:GetObject", "s3:GetObjectAttributes", "s3:GetObjectTagging", "s3:GetObjectRetention", "s3:GetObjectLegalHold"}
-	uploadActions := append(append([]string{}, getActions...), "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:PutObjectTagging")
-	return mustJSON(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			listPrefixStatement(bucket, user),
-			policy(getActions, "arn:aws:s3:::"+bucket+"/"+user+"/inbound/*"),
-			policy(uploadActions, "arn:aws:s3:::"+bucket+"/"+user+"/upload/*"),
-		},
-	})
-}
-
-func AdminPolicy(bucket string) []byte {
-	getActions := []string{"s3:GetObject", "s3:GetObjectAttributes", "s3:GetObjectTagging", "s3:GetObjectRetention", "s3:GetObjectLegalHold"}
-	return mustJSON(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			policy([]string{"s3:ListAllMyBuckets"}, "arn:aws:s3:::*"),
-			policy([]string{"s3:GetBucketLocation", "s3:ListBucketMultipartUploads", "s3:GetBucketPolicyStatus", "s3:GetBucketPolicy", "s3:GetBucketVersioning", "s3:GetBucketObjectLockConfiguration", "s3:GetBucketTagging", "s3:GetBucketAcl"}, "arn:aws:s3:::"+bucket),
-			// 操作员只能按目录浏览 inbound/outbound，不能进入 upload。
-			map[string]any{
-				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{
-					"StringLikeIfExists": map[string]any{"s3:prefix": []string{"", "*/", "*/inbound/", "*/inbound/*", "*/outbound/", "*/outbound/*"}},
-					"StringEquals":       map[string]any{"s3:delimiter": "/"},
-				},
-			},
-			// 允许递归列出 inbound 前缀，Console 删除目录时需要枚举全部对象。
-			map[string]any{
-				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{
-					"StringLike": map[string]any{"s3:prefix": []string{"*/inbound/", "*/inbound/*"}},
-				},
-			},
-			// 显式禁止进入 upload 前缀。
-			map[string]any{
-				"Effect":   "Deny",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{
-					"StringLike": map[string]any{"s3:prefix": []string{"*/upload/", "*/upload/*"}},
-				},
-			},
-			// 除 inbound 外，禁止不带 delimiter 的递归列表，避免绕过 upload 限制。
-			map[string]any{
-				"Effect":   "Deny",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{
-					"Null":          map[string]any{"s3:delimiter": "true"},
-					"StringNotLike": map[string]any{"s3:prefix": []string{"*/inbound/", "*/inbound/*"}},
-				},
-			},
-			// 操作员可以写入和删除所有用户 inbound 下的对象。
-			policy([]string{
-				"s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:PutObjectTagging",
-				"s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteObjectTagging",
-			}, "arn:aws:s3:::"+bucket+"/*/inbound/*"),
-			// 保留 inbound 目录占位，避免删除后目录消失。
-			map[string]any{
-				"Effect":   "Deny",
-				"Action":   []string{"s3:DeleteObject", "s3:DeleteObjectVersion"},
-				"Resource": []string{"arn:aws:s3:::" + bucket + "/*/inbound/.keep"},
-			},
-			policy(getActions, "arn:aws:s3:::"+bucket+"/*/outbound/*"),
-			policy([]string{"admin:CreateUser", "admin:AddUserToGroup", "admin:GetUser", "admin:GetGroup", "admin:ListUsers", "admin:ListGroups", "admin:AttachUserOrGroupPolicy", "admin:ListUserPolicies"}, "arn:aws:s3:::*"),
-		},
-	})
-}
-
-func ServerDataPolicy(bucket string) []byte {
-	getActions := []string{"s3:GetObject", "s3:GetObjectAttributes", "s3:GetObjectTagging", "s3:GetObjectRetention", "s3:GetObjectLegalHold"}
-	return mustJSON(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			map[string]any{
-				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucket"},
-				"Resource": []string{"arn:aws:s3:::" + bucket},
-				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{
-					"", "*/", "*/inbound/", "*/inbound/*", "*/outbound/", "*/outbound/*", "*/upload/", "*/upload/*",
-				}}},
-			},
-			policy(getActions, "arn:aws:s3:::"+bucket+"/*/inbound/*"),
-			policy(getActions, "arn:aws:s3:::"+bucket+"/*/upload/*"),
-			policy([]string{"s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:PutObjectTagging"}, "arn:aws:s3:::"+bucket+"/*/outbound/*"),
-			policy([]string{"s3:PutObject"}, "arn:aws:s3:::"+bucket+"/*/inbound/.keep"),
-			policy([]string{"s3:PutObject"}, "arn:aws:s3:::"+bucket+"/*/outbound/.keep"),
-			policy([]string{"s3:PutObject"}, "arn:aws:s3:::"+bucket+"/*/upload/.keep"),
-			policy([]string{"s3:HeadBucket", "s3:GetBucketLocation"}, "arn:aws:s3:::"+bucket),
-		},
-	})
-}
-
-func ServerAdminPolicy(bucket string) []byte {
-	return mustJSON(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			policy([]string{"admin:CreateUser", "admin:DeleteUser", "admin:GetUser", "admin:ListUsers", "admin:AddUserToGroup", "admin:RemoveUserFromGroup", "admin:CreatePolicy", "admin:DeletePolicy", "admin:AttachUserOrGroupPolicy", "admin:ListUserPolicies", "admin:GetGroup", "admin:ListGroups"}, "arn:aws:s3:::*"),
-			policy([]string{"s3:ListBucket"}, "arn:aws:s3:::"+bucket),
-			policy([]string{"s3:ListBucketMultipartUploads"}, "arn:aws:s3:::"+bucket),
-			policy([]string{"s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"}, "arn:aws:s3:::"+bucket+"/*"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/inbound/*"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/outbound/*"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/upload/*"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/inbound/"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/outbound/"),
-			policy([]string{"s3:DeleteObject"}, "arn:aws:s3:::"+bucket+"/*/upload/"),
-		},
-	})
 }
 
 func GeneratePassword(n int) (string, error) { return auth.GeneratePassword(n) }

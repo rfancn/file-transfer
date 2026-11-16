@@ -21,12 +21,14 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 COPY --from=builder /out/ft-server /app/ft-server
 COPY config/ft-server.example.toml /app/ft-server.toml.default
+COPY --from=builder /src/policy /etc/file-transfer/policy
 COPY script/docker-entrypoint.sh /app/entrypoint.sh
 
 RUN chmod +x /app/ft-server /app/entrypoint.sh \
  && mkdir -p /app/secrets /etc/file-transfer /var/log/file-transfer
 
 ENV PATH="/app:${PATH}"
+ENV FT_POLICY_DIR=/etc/file-transfer/policy
 
 EXPOSE 8080
 ENTRYPOINT ["/app/entrypoint.sh"]

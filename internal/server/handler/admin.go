@@ -52,7 +52,7 @@ func (h *Handler) AdminInit(c *gin.Context) {
 		return
 	}
 
-	res, err := bootstrap.Run(c.Request.Context(), h.Cfg, req.AccessKey, req.SecretKey)
+	res, err := bootstrap.Run(c.Request.Context(), h.Cfg, h.Policies, req.AccessKey, req.SecretKey)
 	if err != nil {
 		logging.Error("admin init", "err", err)
 		response.Err(c, http.StatusBadGateway, "init_failed", "初始化失败")

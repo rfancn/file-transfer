@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/rfancn/file-transfer/internal/adminuser"
@@ -40,6 +41,15 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("管理身份客户端: %w", err)
 	}
+	policyDir := os.Getenv("FT_POLICY_DIR")
+	if policyDir == "" {
+		policyDir = "policy"
+	}
+	policies, err := iam.LoadPolicies(policyDir, cfg.S3.Bucket)
+	if err != nil {
+		return nil, fmt.Errorf("加载 IAM 策略: %w", err)
+	}
+	im.Policies = policies
 	im.PlaceholderS3 = data
 	adminPath := adminuser.Path()
 	admins, initialPassword, err := adminuser.LoadOrCreate(adminPath)
@@ -51,14 +61,15 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	}
 
 	s := &Server{app: &app.App{
-		Cfg:     cfg,
-		RT:      rt,
-		Data:    data,
-		AdminS3: adminS3,
-		IAM:     im,
-		Admins:  admins,
-		Limits:  limiter.New(rt.Limits),
-		Ready:   ready,
+		Cfg:      cfg,
+		RT:       rt,
+		Data:     data,
+		AdminS3:  adminS3,
+		IAM:      im,
+		Policies: policies,
+		Admins:   admins,
+		Limits:   limiter.New(rt.Limits),
+		Ready:    ready,
 	}}
 	s.httpSrv = &http.Server{
 		Addr:              cfg.Server.Listen,

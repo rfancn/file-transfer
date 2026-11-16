@@ -202,9 +202,12 @@ make build
 ```ini
 [Service]
 WorkingDirectory=/var/lib/ft-server
+Environment=FT_POLICY_DIR=/etc/file-transfer/policy
 ExecStart=/usr/local/bin/ft-server -c /etc/file-transfer/ft-server.toml
 Restart=always
 ```
+
+把仓库根目录的 `policy/` 复制到 `/etc/file-transfer/policy`，或用 `FT_POLICY_DIR` 指向实际目录。
 
 #### Docker Compose 部署
 
@@ -221,6 +224,25 @@ cp config/ft-server.example.toml config/ft-server.toml
 ```
 
 RustFS 地址和桶名可通过 `FT_S3_ENDPOINT`、`FT_BUCKET` 环境变量（或 `.env` 文件）覆盖。
+
+#### IAM 策略文件
+
+IAM 策略从代码中抽离到仓库根目录 `policy/`：
+
+| 文件 | 用途 |
+|---|---|
+| `user-group.json` | 用户组策略 |
+| `user-template.json` | 每用户策略模板，使用 `{{user}}` 占位符 |
+| `operator-group.json` | 操作员组策略 |
+| `server-data.json` | `ft-data` 服务身份策略 |
+| `server-admin.json` | `ft-admin` 服务身份策略 |
+
+- `{{bucket}}` 由 `ft-server` 启动时替换；`{{user}}` 只在 `user-template.json` 中，创建用户时替换。
+- `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
+- `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。
+- Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
+- 修改 `user-group.json`、`operator-group.json`、`server-data.json`、`server-admin.json` 后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
+- `user-template.json` 只影响之后创建的用户；已有用户需要重新创建或通过后续工具重建策略。
 
 ### 3. 初始化 RustFS
 

@@ -1,0 +1,53 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "s3:ListAllMyBuckets"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:HeadBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketAcl",
+        "s3:GetBucketPolicyStatus",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketTagging"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{bucket}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Condition": {
+        "StringLikeIfExists": {
+          "s3:prefix": [
+            "",
+            "${aws:username}/",
+            "${aws:username}/*",
+            "${aws:username}/inbound/",
+            "${aws:username}/inbound/*",
+            "${aws:username}/outbound/",
+            "${aws:username}/outbound/*",
+            "${aws:username}/upload/",
+            "${aws:username}/upload/*"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{bucket}}"
+      ]
+    }
+  ],
+  "Version": "2012-10-17"
+}

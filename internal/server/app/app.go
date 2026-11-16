@@ -17,6 +17,7 @@ type App struct {
 	Data     *s3.Manager
 	AdminS3  *s3.Manager
 	IAM      *iam.Manager
+	Policies *iam.Policies
 	Admins   *adminuser.Store
 	Limits   *limiter.Limiter
 	Ready    bool

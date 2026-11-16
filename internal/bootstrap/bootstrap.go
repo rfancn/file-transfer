@@ -27,14 +27,18 @@ type Result struct {
 }
 
 // Run 用 RustFS 管理凭据完成初始化，并把生成的服务凭据写入当前目录的 secrets/s3_credentials.json。
-func Run(ctx context.Context, cfg config.ServerConfig, accessKey, secretKey string) (Result, error) {
+func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, accessKey, secretKey string) (Result, error) {
 	var res Result
+	if policies == nil {
+		return res, fmt.Errorf("IAM 策略未加载")
+	}
 	dataCreds, adminCreds, _ := config.LoadServiceSecrets()
 
 	mgr, err := iam.New(cfg.S3.Endpoint, accessKey, secretKey, cfg.S3.Region, cfg.S3.Bucket)
 	if err != nil {
 		return res, fmt.Errorf("创建管理客户端: %w", err)
 	}
+	mgr.Policies = policies
 	if err := mgr.S3.EnsureBucket(ctx); err != nil {
 		return res, fmt.Errorf("创建桶 %s: %w", cfg.S3.Bucket, err)
 	}
@@ -110,7 +114,7 @@ func Run(ctx context.Context, cfg config.ServerConfig, accessKey, secretKey stri
 	if groupExists {
 		userGroups = []string{iam.UserGroup}
 	}
-	if err := mgr.ReplacePolicy(ctx, iam.UserGroupPol, iam.GroupPolicy(cfg.S3.Bucket), nil, userGroups); err != nil {
+	if err := mgr.ReplacePolicy(ctx, iam.UserGroupPol, policies.Group, nil, userGroups); err != nil {
 		return res, fmt.Errorf("更新用户组策略: %w", err)
 	}
 

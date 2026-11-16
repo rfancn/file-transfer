@@ -10,8 +10,11 @@ services:
       # RustFS 与本服务同机部署，默认通过 host-gateway 访问宿主机
       FT_S3_ENDPOINT: ${FT_S3_ENDPOINT:-http://host.docker.internal:9000}
       FT_BUCKET: ${FT_BUCKET:-file-transfer}
+      # IAM 策略目录；镜像内默认 /etc/file-transfer/policy
+      FT_POLICY_DIR: ${FT_POLICY_DIR:-/etc/file-transfer/policy}
     volumes:
       # 与容器内默认配置路径、日志路径保持一致，无需额外环境变量
       - ./config:/etc/file-transfer
+      - ./policy:/etc/file-transfer/policy:ro
       - ./secrets:/app/secrets
       - ./logs:/var/log/file-transfer
