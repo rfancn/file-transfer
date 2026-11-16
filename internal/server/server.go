@@ -10,6 +10,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/adminuser"
 	"github.com/rfancn/file-transfer/internal/config"
 	"github.com/rfancn/file-transfer/internal/iam"
+	"github.com/rfancn/file-transfer/internal/limiter"
 	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/s3"
 	"github.com/rfancn/file-transfer/internal/server/app"
@@ -56,6 +57,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 		AdminS3: adminS3,
 		IAM:     im,
 		Admins:  admins,
+		Limits:  limiter.New(rt.Limits),
 		Ready:   ready,
 	}}
 	s.httpSrv = &http.Server{
@@ -74,4 +76,10 @@ func (s *Server) Start() error {
 	return s.httpSrv.ListenAndServe()
 }
 
-func (s *Server) Shutdown(ctx context.Context) error { return s.httpSrv.Shutdown(ctx) }
+func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpSrv.Shutdown(ctx)
+	if s.app.Limits != nil {
+		s.app.Limits.Close()
+	}
+	return err
+}
