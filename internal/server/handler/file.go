@@ -29,8 +29,10 @@ func (h *Handler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	defer release()
-	files, err := h.Data.List(c.Request.Context(), username+"/"+dir+"/")
+	files, err := func() ([]protocol.FileInfo, error) {
+		defer release()
+		return h.Data.List(c.Request.Context(), username+"/"+dir+"/")
+	}()
 	if err != nil {
 		logging.Error("list", "username", username, "dir", dir, "err", err)
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "RustFS 服务不可用")

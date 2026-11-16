@@ -34,7 +34,8 @@ func wildcardPath(c *gin.Context) string {
 	return strings.TrimPrefix(c.Param("path"), "/")
 }
 
-// acquireTransfer 获取全局和单用户传输槽。返回 false 时已写入错误响应。
+// acquireTransfer 获取全局和单用户传输槽。返回 false 时调用方不得再写响应：
+// ErrBusy 已写 429，请求取消等错误未写响应。
 func (h *Handler) acquireTransfer(c *gin.Context, username string) (func(), bool) {
 	if h.Limits == nil {
 		return func() {}, true
@@ -49,7 +50,8 @@ func (h *Handler) acquireTransfer(c *gin.Context, username string) (func(), bool
 	return release, true
 }
 
-// acquireMetadata 获取元数据槽。返回 false 时已写入错误响应。
+// acquireMetadata 获取元数据槽。返回 false 时调用方不得再写响应：
+// ErrBusy 已写 429，请求取消等错误未写响应。
 func (h *Handler) acquireMetadata(c *gin.Context) (func(), bool) {
 	if h.Limits == nil {
 		return func() {}, true
