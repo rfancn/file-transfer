@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rfancn/file-transfer/internal/limiter"
+	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/server/app"
 	"github.com/rfancn/file-transfer/internal/server/response"
 )
@@ -40,12 +42,34 @@ func (h *Handler) acquireTransfer(c *gin.Context, username string) (func(), bool
 	if h.Limits == nil {
 		return func() {}, true
 	}
+	start := time.Now()
 	release, err := h.Limits.AcquireTransfer(c.Request.Context(), username)
+	waitMs := time.Since(start).Milliseconds()
 	if err != nil {
 		if errors.Is(err, limiter.ErrBusy) {
+			logging.Warn("limit busy",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"wait_ms", waitMs,
+				"reason", "queue_timeout")
 			response.ErrBusy(c, h.RT.Limits.QueueTimeout)
+		} else {
+			logging.Info("limit canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"wait_ms", waitMs,
+				"reason", "context_canceled")
 		}
 		return nil, false
+	}
+	if waitMs >= 1000 {
+		logging.Info("limit wait",
+			"request_id", c.GetString("request_id"),
+			"username", username,
+			"class", "transfer",
+			"wait_ms", waitMs)
 	}
 	return release, true
 }
@@ -56,12 +80,35 @@ func (h *Handler) acquireMetadata(c *gin.Context) (func(), bool) {
 	if h.Limits == nil {
 		return func() {}, true
 	}
+	username := currentUser(c)
+	start := time.Now()
 	release, err := h.Limits.AcquireMetadata(c.Request.Context())
+	waitMs := time.Since(start).Milliseconds()
 	if err != nil {
 		if errors.Is(err, limiter.ErrBusy) {
+			logging.Warn("limit busy",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "metadata",
+				"wait_ms", waitMs,
+				"reason", "queue_timeout")
 			response.ErrBusy(c, h.RT.Limits.QueueTimeout)
+		} else {
+			logging.Info("limit canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "metadata",
+				"wait_ms", waitMs,
+				"reason", "context_canceled")
 		}
 		return nil, false
+	}
+	if waitMs >= 1000 {
+		logging.Info("limit wait",
+			"request_id", c.GetString("request_id"),
+			"username", username,
+			"class", "metadata",
+			"wait_ms", waitMs)
 	}
 	return release, true
 }

@@ -121,6 +121,12 @@ func (h *Handler) MultipartPart(c *gin.Context) {
 	if err != nil {
 		// 客户端已断开时不再写响应
 		if c.Request.Context().Err() != nil {
+			logging.Warn("limit stream canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"reason", "context_canceled",
+				"path", rel)
 			return
 		}
 		if s3.IsNotFound(err) {

@@ -110,9 +110,18 @@ func (h *Handler) Download(c *gin.Context) {
 		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size, 10))
 		w.WriteHeader(http.StatusOK)
 	}
-	_, err = io.CopyBuffer(w, h.wrapDownload(c, obj, username), make([]byte, copyBufferSize))
-	if err != nil && !errors.Is(err, context.Canceled) {
-		logging.Error("download copy", "key", key, "err", err)
+	n, err := io.CopyBuffer(w, h.wrapDownload(c, obj, username), make([]byte, copyBufferSize))
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logging.Warn("limit stream canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"limited_bytes", n,
+				"reason", "context_canceled")
+		} else {
+			logging.Error("download copy", "key", key, "err", err)
+		}
 	}
 }
 
@@ -135,6 +144,11 @@ func (h *Handler) Upload(c *gin.Context) {
 	defer release()
 	if err := h.Data.Put(c.Request.Context(), key, h.wrapUpload(c, c.Request.Body, username), c.Request.ContentLength); err != nil {
 		if c.Request.Context().Err() != nil {
+			logging.Warn("limit stream canceled",
+				"request_id", c.GetString("request_id"),
+				"username", username,
+				"class", "transfer",
+				"reason", "context_canceled")
 			return
 		}
 		logging.Error("upload", "key", key, "err", err)
