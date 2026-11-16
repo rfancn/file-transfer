@@ -393,6 +393,26 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 - 审计日志中的客户端用户名和主机名来自客户端自报，可被伪造，仅作辅助审计。
 - 修改用户策略或权限后，建议重启 `ft-server` 使策略重新生效。
 
+### 应用层 I/O 限速
+
+`ft-server` 通过 `[limits]` 限制经过它的上传、下载和分片上传：
+
+| 配置 | 说明 | 默认 |
+|---|---|---:|
+| `max_concurrent` | 全局同时传输数 | 4 |
+| `max_concurrent_per_user` | 单用户同时传输数 | 1 |
+| `global_read_bps` | 全局下载带宽，0 表示不限 | 0 |
+| `global_write_bps` | 全局上传带宽，0 表示不限 | 0 |
+| `per_user_read_bps` | 单用户下载带宽 | 0 |
+| `per_user_write_bps` | 单用户上传带宽 | 0 |
+| `queue_timeout` | 排队超时 | 10s |
+
+- 并发上限是第一道闸门，用于保护 HDD 寻道；bps 默认 0，先用 warp 测出对象层吞吐，再按 70% 左右填入。
+- 单用户带宽建议取全局值的一半，防止一个用户占满。
+- 超过 `queue_timeout` 返回 `429` 和 `Retry-After`，`ft-client` 会自动退避重试。
+- Console/Cyberduck 直连不经过 `ft-server`，不受这些值限制，需要由系统层 cgroup 兜底。
+- 修改配置后重启 `ft-server` 生效；置 `enabled = false` 可整体关闭限速。
+
 ## 权限矩阵
 
 | 身份 | `inbound` | `outbound` | `upload` |

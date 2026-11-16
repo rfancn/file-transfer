@@ -434,3 +434,24 @@ func TestLimitsValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestExampleServerConfigHasLimits(t *testing.T) {
+	data, err := os.ReadFile("../../config/ft-server.example.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[limits]") {
+		t.Fatal("示例配置缺少 [limits] 段")
+	}
+
+	cfg, err := LoadServer("../../config/ft-server.example.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Limits.Enabled {
+		t.Fatal("示例配置的 limits.enabled 应为 true")
+	}
+	if cfg.Limits.MaxConcurrent != 4 {
+		t.Fatalf("max_concurrent = %d，期望 4", cfg.Limits.MaxConcurrent)
+	}
+}

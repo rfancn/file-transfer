@@ -148,10 +148,10 @@ Console/Cyberduck ─────────S3───────────
   enabled                 = true
   max_concurrent          = 4
   max_concurrent_per_user = 1
-  global_read_bps         = 0
-  global_write_bps        = 0
-  per_user_read_bps       = 0
-  per_user_write_bps      = 0
+  global_read_bps         = "0"
+  global_write_bps        = "0"
+  per_user_read_bps       = "0"
+  per_user_write_bps      = "0"
   queue_timeout           = "10s"
 ```
 
