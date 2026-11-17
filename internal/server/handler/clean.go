@@ -89,7 +89,7 @@ func (h *Handler) clean(ctx context.Context, dir string, days int, dryRun bool) 
 	}
 
 	cutoffDate := cutoff.Format("20060102")
-	for obj := range h.AdminS3.Client.ListObjects(ctx, h.Cfg.S3.Bucket, minio.ListObjectsOptions{Recursive: true}) {
+	for obj := range h.AdminS3.Client.ListObjects(ctx, h.Cfg.S3.HomeBucket, minio.ListObjectsOptions{Recursive: true}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}

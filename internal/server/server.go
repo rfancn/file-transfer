@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rfancn/file-transfer/internal/adminuser"
@@ -29,23 +30,24 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	if !ready {
 		logging.Warn("系统尚未初始化，业务接口不可用，请执行 ft-admin init")
 	}
-	data, err := s3.New(cfg.S3.Endpoint, dataCreds.AccessKey, dataCreds.SecretKey, cfg.S3.Region, cfg.S3.Bucket)
+	data, err := s3.New(cfg.S3.Endpoint, dataCreds.AccessKey, dataCreds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return nil, fmt.Errorf("数据身份客户端: %w", err)
 	}
-	adminS3, err := s3.New(cfg.S3.Endpoint, adminCreds.AccessKey, adminCreds.SecretKey, cfg.S3.Region, cfg.S3.Bucket)
+	adminS3, err := s3.New(cfg.S3.Endpoint, adminCreds.AccessKey, adminCreds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return nil, fmt.Errorf("管理身份 S3 客户端: %w", err)
 	}
-	im, err := iam.New(cfg.S3.Endpoint, adminCreds.AccessKey, adminCreds.SecretKey, cfg.S3.Region, cfg.S3.Bucket)
+	im, err := iam.New(cfg.S3.Endpoint, adminCreds.AccessKey, adminCreds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return nil, fmt.Errorf("管理身份客户端: %w", err)
 	}
-	policyDir := os.Getenv("FT_POLICY_DIR")
-	if policyDir == "" {
-		policyDir = "policy"
-	}
-	policies, err := iam.LoadPolicies(policyDir)
+	policyDir := resolvePolicyDir(rt.ConfigPath)
+	policies, err := iam.LoadPolicies(policyDir, iam.PolicyOptions{
+		HomeBucket:   cfg.S3.HomeBucket,
+		SharedBucket: cfg.S3.SharedBucket,
+		SharedDirs:   cfg.S3.SharedDirs,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("加载 IAM 策略: %w", err)
 	}
@@ -80,6 +82,22 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	}
 	s.app.Shutdown = s.Shutdown
 	return s, nil
+}
+
+// resolvePolicyDir 返回策略目录，固定为 policy。先按工作目录查找，
+// 再按配置文件所在目录查找，以便本地、systemd 和 Docker 共用同一份配置。
+func resolvePolicyDir(configPath string) string {
+	const dir = "policy"
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		return dir
+	}
+	if configPath != "" {
+		fallback := filepath.Join(filepath.Dir(configPath), dir)
+		if info, err := os.Stat(fallback); err == nil && info.IsDir() {
+			return fallback
+		}
+	}
+	return dir
 }
 
 func (s *Server) Start() error {

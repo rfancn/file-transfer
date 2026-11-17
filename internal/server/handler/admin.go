@@ -30,7 +30,7 @@ func (h *Handler) AdminInit(c *gin.Context) {
 	}
 
 	// 用 root 凭据实际访问一次 RustFS，验证其管理权限。
-	probe, err := iam.New(h.Cfg.S3.Endpoint, req.AccessKey, req.SecretKey, h.Cfg.S3.Region, h.Cfg.S3.Bucket)
+	probe, err := iam.New(h.Cfg.S3.Endpoint, req.AccessKey, req.SecretKey, h.Cfg.S3.Region, h.Cfg.S3.HomeBucket)
 	if err != nil {
 		logging.Error("admin init 创建管理客户端失败", "err", err)
 		response.Err(c, http.StatusInternalServerError, "internal_error", "创建 RustFS 管理客户端失败")
@@ -100,12 +100,16 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 	if group == "" {
 		group = iam.UserGroup
 	}
-	if group != iam.UserGroup && group != iam.AdminGroup {
-		response.Err(c, http.StatusBadRequest, "invalid_group", "组只允许 ft-user-group 或 ft-operator-group")
+	if !iam.IsValidGroup(group) {
+		response.Err(c, http.StatusBadRequest, "invalid_group", "组只允许 ft-user-group、ft-operator-group 或 shared-operator-group")
 		return
 	}
-	if group == iam.AdminGroup && !req.ConfirmOperator {
-		response.Err(c, http.StatusBadRequest, "operator_confirm_required", "创建操作员需要二次确认")
+	if iam.IsPrivilegedGroup(group) && !req.ConfirmOperator {
+		message := "创建操作员需要二次确认"
+		if group == iam.SharedAdminGroup {
+			message = "创建共享操作员需要二次确认"
+		}
+		response.Err(c, http.StatusBadRequest, "operator_confirm_required", message)
 		return
 	}
 	exists, err := h.IAM.UserExists(c.Request.Context(), username)
@@ -136,10 +140,17 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 		response.Err(c, http.StatusConflict, "already_exists", "用户已存在")
 		return
 	}
-	if group == iam.AdminGroup {
-		logging.Warn("已创建操作员用户", "username", username, "group", group)
+	var role, action string
+	switch group {
+	case iam.AdminGroup:
+		role, action = "操作员", "admin.user.add.operator"
+	case iam.SharedAdminGroup:
+		role, action = "共享操作员", "admin.user.add.shared_operator"
+	}
+	if action != "" {
+		logging.Warn("已创建"+role+"用户", "username", username, "group", group)
 		logging.Audit(logging.AuditEvent{
-			Action:    "admin.user.add.operator",
+			Action:    action,
 			Actor:     c.GetString("admin"),
 			ActorType: "admin",
 			Target:    username,

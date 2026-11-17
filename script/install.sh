@@ -4,17 +4,17 @@ set -eu
 # ============================================================
 # ft-client 安装器
 # 只安装 ft-client 和客户端配置（先执行 make build）。
-# 可用 FT_SRC_DIR 指定源码目录，FT_SERVER_URL 跳过交互。
+# 第一个参数可指定服务端地址；不提供时交互输入。
 # 需要 root 权限。
 # ============================================================
 
-SRC_DIR="${FT_SRC_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT_BIN="$SRC_DIR/bin/ft-client"
 CLIENT_CONF="$SRC_DIR/config/ft-client.example.toml"
-PREFIX="${PREFIX:-/usr/local}"
-CONF_DIR="${FT_CONF_DIR:-/etc/file-transfer}"
+PREFIX="/usr/local"
+CONF_DIR="/etc/file-transfer"
 CONF_FILE="$CONF_DIR/ft-client.toml"
-FT_SERVER_URL="${FT_SERVER_URL:-}"
+SERVER_URL="${1:-}"
 
 error() {
   echo "❌ $*" >&2
@@ -49,15 +49,15 @@ if [ -f "$CONF_FILE" ]; then
 fi
 
 # 收集需要写入配置的服务端地址。
-if [ -z "$FT_SERVER_URL" ]; then
+if [ -z "$SERVER_URL" ]; then
   printf "服务端地址（如 http://192.168.20.10:8080）: "
-  if ! IFS= read -r FT_SERVER_URL; then
+  if ! IFS= read -r SERVER_URL; then
     error "未提供服务端地址"
     exit 1
   fi
 fi
 
-case "$FT_SERVER_URL" in
+case "$SERVER_URL" in
   https://*)
     error "客户端与服务端在同一局域网，请使用 http://"
     exit 1
@@ -67,7 +67,7 @@ case "$FT_SERVER_URL" in
     error "只支持 http:// 地址"
     exit 1
     ;;
-  *) FT_SERVER_URL="http://$FT_SERVER_URL" ;;
+  *) SERVER_URL="http://$SERVER_URL" ;;
 esac
 
 mkdir -p "$PREFIX/bin" "$CONF_DIR"
@@ -76,11 +76,11 @@ chown root:root "$PREFIX/bin/ft-client"
 echo "✅ 已安装 ft-client: $PREFIX/bin/ft-client"
 
 tmp="$CONF_FILE.tmp.$$"
-awk -v url="$FT_SERVER_URL" '/^[[:space:]]*url[[:space:]]*=/ { print "  url = \"" url "\""; next } { print }' "$CLIENT_CONF" > "$tmp"
+awk -v url="$SERVER_URL" '/^[[:space:]]*url[[:space:]]*=/ { print "  url = \"" url "\""; next } { print }' "$CLIENT_CONF" > "$tmp"
 chmod 0644 "$tmp"
 mv "$tmp" "$CONF_FILE"
 chown root:root "$CONF_FILE"
-echo "✅ 已写入配置: $CONF_FILE（服务端 $FT_SERVER_URL）"
+echo "✅ 已写入配置: $CONF_FILE（服务端 $SERVER_URL）"
 
 "$PREFIX/bin/ft-client" --version >/dev/null
 echo "✅ ft-client 可执行"

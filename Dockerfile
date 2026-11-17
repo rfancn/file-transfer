@@ -28,7 +28,6 @@ RUN chmod +x /app/ft-server /app/entrypoint.sh \
  && mkdir -p /app/secrets /etc/file-transfer /var/log/file-transfer
 
 ENV PATH="/app:${PATH}"
-ENV FT_POLICY_DIR=/etc/file-transfer/policy
 
 EXPOSE 8080
 ENTRYPOINT ["/app/entrypoint.sh"]

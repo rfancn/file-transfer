@@ -1,6 +1,6 @@
 # 简易文件摆渡系统
 
-用于在相互隔离的网络之间，按用户、按方向安全交换文件。所有文件集中存放在 RustFS 的 `file-transfer` 桶中：
+用于在相互隔离的网络之间，按用户、按方向安全交换文件。个人文件集中存放在 RustFS 的 `home` 桶中，公共资料存放在 `shared` 桶中：
 
 - 用户使用 `ft-client`（用户端）上传和下载；
 - 工作电脑用户建议使用 Cyberduck 管理自己的文件（见「Cyberduck 配置」），也可使用 RustFS Console，均只能访问自己有权访问的目录；
@@ -10,12 +10,18 @@
 ## 目录模型
 
 ```text
-file-transfer/
+home/                                # 个人数据，s3.home_bucket 可配置
 └── <用户名>/
     ├── inbound/                    # 外网 → 内网
     ├── outbound/<YYYYMMDDNN>/      # 内网 → 外网，每次上传一个批次
     └── upload/                     # 工作电脑 → 服务器
+
+shared/                              # 公共资料，s3.shared_bucket 可配置
+├── software/                       # 共享目录，s3.shared_dirs 可配置
+└── document/
 ```
+
+普通用户组可以列出并下载 `shared` 桶中 `s3.shared_dirs` 配置目录下的内容，不能写入或删除。共享操作员组可以列出、上传和删除共享桶内容，但不能删除桶。
 
 | 目录 | 摆渡方向 | 写入方 | 读取方 |
 |---|---|---|---|
@@ -32,6 +38,7 @@ file-transfer/
 | 用户 | `ft-client`（用户端） | 下载 `inbound`/`upload`，上传 `outbound` |
 | 工作电脑用户 | RustFS Console / Cyberduck | 列出自己的 `inbound`/`outbound`/`upload`，上传或删除自己 `upload` 下的内容；不能删除 `upload` 目录本身，不能下载或写入 `inbound`/`outbound` |
 | 摆渡操作员 | RustFS Console / Cyberduck（operator 账号） | 向所有用户 `inbound` 放件/删除，从所有用户 `outbound` 取件 |
+| 共享操作员 | RustFS Console / Cyberduck（shared-operator 账号） | 列出、上传、下载和删除共享桶内容；不能删除桶 |
 | 管理员 | `ft-admin`（管理客户端） | 初始化、创建/删除用户、重置密码、清理数据 |
 | 服务端 | `ft-server` | 认证、目录隔离、文件代理、断点续传、审计 |
 
@@ -132,13 +139,15 @@ ft-client download upload project-a/data.zip --output ./upload
 | 端口 | `443` |
 | Access Key ID | 个人用户名 |
 | Secret Access Key | 个人密码 |
-| 路径 | `file-transfer/<用户名>` |
+| 路径 | `home/<用户名>` |
 
-例如用户 `zhangsan` 的路径为 `file-transfer/zhangsan`。连接后可直接在 `upload/` 下拖拽上传、删除自己的文件；`inbound/`、`outbound/` 只可列出，不能下载、写入或删除。
+例如用户 `zhangsan` 的路径为 `home/zhangsan`。连接后可直接在 `upload/` 下拖拽上传、删除自己的文件；`inbound/`、`outbound/` 只可列出，不能下载、写入或删除。
+
+共享资料使用同一账号，把书签路径改为 `shared`，即可浏览 `software/`、`document/` 等配置目录并下载内容；普通用户不能写入或删除共享内容。
 
 注意事项：
 
-- 路径必须包含自己的用户名，直接连接 bucket 根目录会被拒绝（用户组没有 `s3:ListAllMyBuckets` 权限）。
+- 路径必须包含自己的用户名，直接连接 home 桶根目录会被拒绝（用户组没有 `s3:ListAllMyBuckets` 权限）。
 - Cyberduck 直连不经过 `ft-server`，不受应用层限速约束，大文件传输请自行控制并发（见「应用层 I/O 限速」）。
 
 ## 系统组成
@@ -204,7 +213,9 @@ make build
 
 [s3]
   endpoint = "http://127.0.0.1:9000"
-  bucket = "file-transfer"
+  home_bucket = "home"
+  shared_bucket = "shared"
+  shared_dirs = ["software", "document"]
 
 [retention]
   inbound_days = 3
@@ -213,7 +224,18 @@ make build
   incomplete_days = 3
 ```
 
-完整配置见 [config/ft-server.example.toml](config/ft-server.example.toml)。首次启动时：
+完整配置见 [config/ft-server.example.toml](config/ft-server.example.toml)。
+
+> **升级说明：**
+>
+> - `s3.bucket` 已移除。请把原桶名填入 `s3.home_bucket`，并补充 `shared_bucket` / `shared_dirs`；保留旧 `bucket` 键会导致启动报错。
+> - 环境变量只保留 `FT_S3_ENDPOINT`。配置文件路径改用 `-c` / `--config`，不再读取 `FT_SERVER_CONFIG` / `FT_CLIENT_CONFIG` / `FT_ADMIN_CONFIG`。
+> - 命令行长参数统一使用 `--`，例如 `--config`、`--group`、`--days`；旧的 `-config` 等单横线写法不再支持。
+> - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
+> - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
+> - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
+
+首次启动时：
 
 - `auth.token_secret` / `auth.upload_secret` 为空或仍为示例值时，会自动生成随机密钥并写回配置；
 - 自动生成管理员账号 `admin` 和 10 位随机密码，保存在 `ft-server` 当前工作目录的 `secrets/user.json`（0600），日志中只输出一次密码。
@@ -223,12 +245,11 @@ make build
 ```ini
 [Service]
 WorkingDirectory=/var/lib/ft-server
-Environment=FT_POLICY_DIR=/etc/file-transfer/policy
 ExecStart=/usr/local/bin/ft-server -c /etc/file-transfer/ft-server.toml
 Restart=always
 ```
 
-把仓库根目录的 `policy/` 复制到 `/etc/file-transfer/policy`，或用 `FT_POLICY_DIR` 指向实际目录。
+把仓库根目录的 `policy/` 复制到 `/etc/file-transfer/policy`。`ft-server` 固定使用 `policy` 目录，会先按工作目录、再按配置文件所在目录查找，无需额外配置。
 
 #### Docker Compose 部署
 
@@ -244,7 +265,7 @@ docker compose up -d --build
 cp config/ft-server.example.toml config/ft-server.toml
 ```
 
-RustFS 地址和桶名可通过 `FT_S3_ENDPOINT`、`FT_BUCKET` 环境变量（或 `.env` 文件）覆盖。
+RustFS 地址可通过 `FT_S3_ENDPOINT` 环境变量（或 `.env` 文件）覆盖；桶名和共享目录仅在 `ft-server.toml` 中配置。
 
 #### IAM 策略文件
 
@@ -252,42 +273,57 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 
 | 文件 | 用途 |
 |---|---|
-| `user-group.json` | 用户组策略：允许列出 `<username>/inbound`、`outbound`、`upload`，允许读写和删除 `<username>/upload/*`；`<username>/upload/.keep` 受 Deny 保护 |
-| `operator-group.json` | 操作员组策略：所有用户 inbound list/put/delete、outbound list/get，无 upload 和 admin 权限 |
+| `user-group.json` | 用户组策略：列出、读写和删除自己的 `upload`；列出并读取 `shared` 桶配置目录；`upload/.keep` 受 Deny 保护 |
+| `operator-group.json` | 摆渡操作员组策略：所有用户 inbound list/put/delete、outbound list/get，无 upload 和 admin 权限 |
+| `shared-operator-group.json` | 共享操作员组策略：共享桶 list/get/put/delete，显式 Deny 删除桶 |
 | `server-data.json` | `ft-data` 服务身份策略 |
 | `server-admin.json` | `ft-admin` 服务身份策略 |
 
-- 策略中的 bucket 固定为 `file-transfer`，`ft-server` 不再替换 bucket；请确保 `FT_BUCKET` 与此一致。
-- `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换。
-- 策略文件不能包含 `{{...}}` 占位符，加载时会校验。
+- 策略文件是模板，支持以下占位符：
+  - `{{HOME_BUCKET}}`：替换为 `s3.home_bucket`；
+  - `{{SHARED_BUCKET}}`：替换为 `s3.shared_bucket`；
+  - `"{{SHARED_DIR_PREFIXES}}"`：替换为 `s3.shared_dirs` 对应的 list 前缀；
+  - `"{{SHARED_DIR_OBJECT_ARNS}}"`：替换为 `s3.shared_dirs` 对应的对象 ARN。
+- `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换，不是模板占位符。
+- 渲染后会校验 JSON；残留未知 `{{...}}` 会导致启动失败。
 - 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
-- 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `<bucket>/<username>` 路径。
-- 操作员组不包含任何 `admin:*` 权限，只负责 inbound/outbound 摆渡。
+- 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `home/<username>` 路径。
+- 用户组只能列出共享桶根（用于发现顶层目录）和 `s3.shared_dirs` 配置目录，不能读取其他目录。
+- `ft-operator-group` 不包含任何 `admin:*` 权限，只负责 inbound/outbound 摆渡。
+- `shared-operator-group` 对共享桶有 list/get/put/delete，但不包含 `admin:*` 和桶删除权限。
 - `ft-data` 不授予 Delete 权限；`ft-admin clean` 使用 `ft-admin` 服务身份执行删除。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
-- `FT_POLICY_DIR` 可覆盖策略目录，默认 `policy`（相对于 `ft-server` 的工作目录）；systemd 部署需保证该目录可读。
+- 策略目录固定为 `policy`，依次在工作目录和配置文件所在目录查找，无需配置。
 - Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
 - 修改策略后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
-- 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `<bucket>/<username>`，直接连接 bucket 根目录会被拒绝。
+- 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
 
 ### 3. 初始化 RustFS
 
 在服务器主机上执行：
 
 ```sh
+# 交互输入 root 凭据
 ft-admin init
+
+# 或通过命令行参数/文件提供
+ft-admin init --access-key <AK> --secret-key <SK>
+ft-admin init --access-key <AK> --secret-key-file /etc/file-transfer/rustfs-secret
 ```
 
-执行需要RustFS root Access Key / Secret Key（也可用 `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` 提供），root 凭据只在内存中使用。
+执行需要 RustFS root Access Key / Secret Key，可用 `--access-key` / `--secret-key` 或 `--secret-key-file` 提供，否则交互输入；root 凭据只在内存中使用。
 
-初始化会创建桶、策略、用户组和操作员组：
+初始化会创建桶、共享目录、策略和用户组：
 
+- `home` 桶（`s3.home_bucket`）：个人数据，用户目录结构不变；
+- `shared` 桶（`s3.shared_bucket`）：公共资料，并在 `s3.shared_dirs` 配置的目录下写入 `.keep`；
 - `ft-data`：代理用户的数据面操作；
 - `ft-admin` 服务身份：`ft-server` 使用的 RustFS 管理面身份，执行用户管理和数据清理（与命令行工具 `ft-admin` 同名，职责不同）；
-- `ft-user-group`：普通用户组，绑定可列出 `inbound`/`outbound`/`upload`、读写和删除 `upload` 内容的策略；
-- `ft-operator-group`：操作员组，绑定所有用户 `inbound`/`outbound` 的策略。
+- `ft-user-group`：普通用户组，绑定个人目录读写、`upload` 管理和共享目录只读策略；
+- `ft-operator-group`：摆渡操作员组，绑定所有用户 `inbound`/`outbound` 的策略；
+- `shared-operator-group`：共享操作员组，绑定共享桶 list/get/put/delete 策略。
 
-初始化**不会创建默认操作员账号**。操作员账号通过 `ft-admin user add` 创建时选择操作员组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
+初始化**不会创建默认操作员或共享操作员账号**。账号通过 `ft-admin user add` 创建时选择对应组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
 
 ### 4. 创建用户
 
@@ -301,7 +337,12 @@ ft-admin user add zhangsan
 ft-client register
 ```
 
-交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 操作员组。选择操作员组会显示高权限警告并要求二次确认；非交互执行必须用 `--group user` 或 `--group operator` 指定组，创建操作员还需要 `--yes`。
+交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 摆渡文件操作员组 / 共享文件操作员组。选择高权限组会显示警告并要求二次确认；非交互执行必须用 `--group user`、`--group operator` 或 `--group shared-operator` 指定组，创建高权限账号还需要 `--yes`。
+
+```sh
+# 添加共享操作员
+ft-admin user add zhangsan --group shared-operator --yes
+```
 
 注册用户名请使用本人姓名全拼，只能包含字母、数字、下划线和连字符；密码至少 8 位，需包含大写字母、小写字母、数字和特殊字符。
 
@@ -314,14 +355,14 @@ sudo ./script/install.sh
 安装脚本会写入 `/etc/file-transfer/ft-client.toml`，也可以非交互指定服务端地址：
 
 ```sh
-sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
+sudo ./script/install.sh http://ft-server:8080
 ```
 
 ## `ft-client` 使用简介
 
 ### 配置
 
-默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c`、`-config` 或 `FT_CLIENT_CONFIG` 指定；`FT_SERVER_URL` 可覆盖服务端地址。
+默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c` 或 `--config` 指定；服务端地址在配置文件的 `[server] url` 中设置。
 
 ```toml
 [server]
@@ -372,8 +413,8 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 ### 配置与登录
 
 - 默认读取 `/etc/file-transfer/ft-client.toml`（与 `ft-client` 共用），只使用 `[server] url`。
-- 配置文件可用 `-config` 或 `FT_ADMIN_CONFIG` 指定；`FT_SERVER_URL` 可覆盖服务端地址。
-- 管理员账号密码通过 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` 提供，否则启动时交互输入。
+- 配置文件可用 `--config` 指定；服务端地址在配置文件的 `[server] url` 中设置。
+- 管理员账号密码可用 `--admin-user` / `--admin-password` 或 `--admin-password-file` 提供，否则启动时交互输入。`--admin-password` 会出现在进程列表中，自动化场景建议使用 `--admin-password-file`。
 - 启动后先登录 `ft-server`，再显示菜单或执行子命令。
 
 ### 命令
@@ -381,7 +422,7 @@ sudo FT_SERVER_URL=http://ft-server:8080 ./script/install.sh
 | 命令 | 说明 |
 |---|---|
 | `ft-admin init` | 初始化 RustFS 桶、策略和系统身份 |
-| `ft-admin user add <username> [--group user\|operator] [--yes]` | 添加用户，交互式用菜单选组；非交互必须指定 `--group`，操作员组需 `--yes` |
+| `ft-admin user add <username> [--group user\|operator\|shared-operator] [--yes]` | 添加用户，交互式用菜单选组；非交互必须指定 `--group`，高权限组需 `--yes` |
 | `ft-admin user del <username> [--yes]` | 删除用户及其全部数据 |
 | `ft-admin user reset <username>` | 重置用户密码，输出一次性新密码 |
 | `ft-admin user list` | 列出用户、类型、状态、策略和组 |
@@ -406,19 +447,18 @@ ft-admin clean upload --yes             # 非交互执行
 
 ### 定时清理
 
-`script/ft-clean.sh` 从 `/etc/file-transfer/ft-admin.env`（0600）读取管理员凭证并自动追加 `--yes`。环境文件中的变量需要 `export`：
+`script/ft-clean.sh` 从 `/etc/file-transfer/ft-admin.env`（0600）读取管理员凭证，把密码写入临时 0600 文件后通过 `--admin-password-file` 传给 `ft-admin`，避免密码出现在进程列表中。服务器地址从 `/etc/file-transfer/ft-client.toml` 的 `[server] url` 读取：
 
 ```sh
-export FT_ADMIN_USER=admin
-export FT_ADMIN_PASSWORD=...
-export FT_SERVER_URL=http://127.0.0.1:8080
+ADMIN_USER=admin
+ADMIN_PASSWORD=...
 ```
 
 ```cron
 0 3 * * * /path/to/ft-clean.sh inbound --days 3 >> /var/log/ft-clean.log 2>&1
 ```
 
-可用环境变量：`FT_ADMIN_ENV`、`FT_ADMIN_BIN`、`FT_ADMIN_CONFIG`。
+脚本固定使用 `/usr/local/bin/ft-admin` 和 `/etc/file-transfer/ft-client.toml`。
 
 ## `ft-server` 运行与维护
 
@@ -474,7 +514,17 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 | 操作员（`ft-operator-group`） | 列出、上传、删除所有用户 | 列出、读取所有用户 | 无权限 |
 | 管理员（`ft-admin` 管理客户端） | 管理、删除 | 管理、删除 | 管理、删除 |
 
-普通用户只能列出自己的 `inbound`/`outbound`/`upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `file-transfer/<用户名>`（见「Cyberduck 配置」）。
+普通用户只能列出自己的 `inbound`/`outbound`/`upload` 前缀，无法看到其他用户目录。Cyberduck 建议把书签初始路径设置为 `home/<用户名>`（见「Cyberduck 配置」）。
+
+### 共享桶权限矩阵
+
+| 身份 | 共享桶根 | `s3.shared_dirs` 配置目录 | 其他目录 |
+|---|---|---|---|
+| 普通用户（`ft-user-group`） | 列出顶层目录 | 列出、读取 | 无权限 |
+| 共享操作员（`shared-operator-group`） | 列出 | 列出、读取、上传、删除 | 列出、读取、上传、删除 |
+| 其他用户 | 无权限 | 无权限 | 无权限 |
+
+共享操作员不能删除共享桶，也不能管理 IAM 用户或策略。
 
 ## 安全边界
 
@@ -486,7 +536,8 @@ export FT_SERVER_URL=http://127.0.0.1:8080
 - RustFS root 凭据只在初始化期间于内存中使用，不写入磁盘。
 - `ft-operator-group` 成员可以读取所有用户 `outbound`、删除所有用户 `inbound` 对象（`inbound/.keep` 除外），是高权限角色；创建操作员账号时 `ft-admin` 会要求二次确认，服务端也会校验 `confirm_operator` 并记录审计日志。
 - 操作员策略不包含任何 `admin:*` 权限，不能管理 IAM 用户或策略。
-- 初始化不创建默认操作员账号；操作员必须显式创建并加入 `ft-operator-group`。
+- `shared-operator-group` 成员可以读写和删除共享桶内容，但不能删除桶；创建共享操作员账号同样需要二次确认并记录审计日志。
+- 初始化不创建默认操作员或共享操作员账号；成员必须显式创建并加入对应组。
 - 生产环境请替换配置中的全部默认密钥和口令。
 
 ## 常见问题

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -23,7 +22,6 @@ import (
 	"github.com/rfancn/file-transfer/internal/cliui"
 	"github.com/rfancn/file-transfer/internal/config"
 	"github.com/rfancn/file-transfer/internal/protocol"
-	"github.com/rfancn/file-transfer/internal/version"
 )
 
 const (
@@ -38,101 +36,10 @@ const (
 	exitInterrupt = 130
 )
 
-type globals struct {
-	configPath    string
-	server        string
-	debug         bool
-	username      string
-	passwordStdin bool
-}
-
 func main() {
-	g := globals{}
-	fs := flag.NewFlagSet("ft-client", flag.ExitOnError)
-	fs.StringVar(&g.configPath, "config", "", "客户端配置")
-	fs.StringVar(&g.configPath, "c", "", "客户端配置（简写）")
-	fs.StringVar(&g.server, "server", "", "覆盖服务器地址")
-	fs.BoolVar(&g.debug, "debug", false, "输出调试信息")
-	fs.StringVar(&g.username, "username", "", "账号")
-	fs.BoolVar(&g.passwordStdin, "password-stdin", false, "从标准输入读取密码")
-	showVersion := fs.Bool("version", false, "输出版本")
-	_ = fs.Parse(os.Args[1:])
-	if *showVersion {
-		fmt.Println(version.Version)
-		return
-	}
-	cfg, err := config.LoadClient(g.configPath)
-	if err != nil {
-		fail(exitUsage, "加载配置失败: %v", err)
-	}
-	if g.server != "" {
-		cfg.Server.URL = g.server
-	}
-	if cfg.Server.URL == "" {
-		cfgPath := g.configPath
-		if cfgPath == "" {
-			cfgPath = os.Getenv("FT_CLIENT_CONFIG")
-		}
-		if cfgPath == "" {
-			cfgPath = config.DefaultClientConfig
-		}
-		fail(exitUsage, "未配置 server.url：请在 %s 的 [server] 段设置，或使用 --server / FT_SERVER_URL", cfgPath)
-	}
-	args := fs.Args()
-	if len(args) == 0 {
-		runMenu(g, cfg)
-		return
-	}
-	switch args[0] {
-	case "register":
-		runRegister(g, cfg, args[1:])
-	case "list":
-		runList(g, cfg, args[1:])
-	case "download":
-		runDownload(g, cfg, args[1:])
-	case "upload":
-		runUpload(g, cfg, args[1:])
-	default:
-		fail(exitUsage, "未知子命令: %s", args[0])
-	}
-}
-
-func runRegister(g globals, cfg config.ClientConfig, args []string) {
-	fs := flag.NewFlagSet("register", flag.ExitOnError)
-	name := fs.String("username", g.username, "要注册的用户名")
-	flagArgs, _ := splitArgs(args, map[string]bool{"h": true, "help": true})
-	_ = fs.Parse(flagArgs)
-	fmt.Println("提示：注册用户名请使用本人姓名的全拼（例如 zhangsan）。")
-	if *name == "" {
-		value, err := cliui.Input("用户名（姓名全拼）", currentUser(), validateLocalUsername)
-		if canceledByUser(err) {
-			fail(exitInterrupt, "已取消")
-		}
-		if err != nil {
-			fail(exitUsage, "读取用户名失败: %v", err)
-		}
-		*name = value
-	}
-	if err := validateLocalUsername(*name); err != nil {
+	if err := rootCmd.Execute(); err != nil {
 		fail(exitUsage, "%v", err)
 	}
-	password, ok := promptNewPassword()
-	if !ok {
-		return
-	}
-	cl, err := client.New(cfg)
-	if err != nil {
-		fail(exitNetwork, "%v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	resp, err := cl.Register(ctx, *name, password)
-	if err != nil {
-		failFor(err)
-	}
-	fmt.Printf("注册成功: %s\n", resp.Username)
-	saveClientCredentials(resp.Username, password)
-	printCredentialsSaved()
 }
 
 func promptNewPassword() (string, bool) {
@@ -160,68 +67,6 @@ func promptNewPassword() (string, bool) {
 			continue
 		}
 		return pass, true
-	}
-}
-
-func runList(g globals, cfg config.ClientConfig, args []string) {
-	if len(args) != 1 || (args[0] != "inbound" && args[0] != "upload" && args[0] != "outbound") {
-		fail(exitUsage, "用法: ft-client list <inbound|outbound|upload>")
-	}
-	cl := login(g, cfg)
-	if cl == nil {
-		return
-	}
-	files, err := cl.List(context.Background(), args[0])
-	if err != nil {
-		failFor(err)
-	}
-	printFiles(args[0], files)
-}
-
-func runDownload(g globals, cfg config.ClientConfig, args []string) {
-	fs := flag.NewFlagSet("download", flag.ExitOnError)
-	out := fs.String("output", ".", "下载目录")
-	force := fs.Bool("force", false, "覆盖已存在文件")
-	flagArgs, rest := splitArgs(args, map[string]bool{"force": true, "h": true, "help": true})
-	_ = fs.Parse(flagArgs)
-	if len(rest) != 2 || (rest[0] != "inbound" && rest[0] != "upload") {
-		fail(exitUsage, "用法: ft-client download <inbound|upload> <相对路径> [--output DIR] [--force]")
-	}
-	cl := login(g, cfg)
-	if cl == nil {
-		return
-	}
-	if err := cl.Download(context.Background(), rest[0], rest[1], *out, *force, progressPrinter()); err != nil {
-		failFor(err)
-	}
-	fmt.Printf("下载完成: %s\n", *out)
-}
-
-func runUpload(g globals, cfg config.ClientConfig, args []string) {
-	fs := flag.NewFlagSet("upload", flag.ExitOnError)
-	dest := fs.String("dest", "", "目标名称")
-	yes := fs.Bool("yes", false, "跳过确认")
-	flagArgs, rest := splitArgs(args, map[string]bool{"yes": true, "h": true, "help": true})
-	_ = fs.Parse(flagArgs)
-	if len(rest) != 1 {
-		fail(exitUsage, "用法: ft-client upload <本地路径> [--dest NAME] [--yes]")
-	}
-	if _, err := os.Stat(rest[0]); err != nil {
-		fail(exitLocalFile, "%v", err)
-	}
-	cl := login(g, cfg)
-	if cl == nil {
-		return
-	}
-	completed, err := uploadFlow(cl, cfg, rest[0], *dest, *yes)
-	if err != nil {
-		if errors.Is(err, errPartialUpload) {
-			fail(exitPartial, "%v", err)
-		}
-		failFor(err)
-	}
-	if completed {
-		os.Exit(exitOK)
 	}
 }
 
@@ -1339,16 +1184,30 @@ func firstRun(g globals, cfg config.ClientConfig) *client.Client {
 
 // registerNew 注册新用户并自动登录。
 func registerNew(g globals, cfg config.ClientConfig) *client.Client {
+	cl, username, password, err := registerAccount(cfg, g.username)
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := cl.Login(ctx, username, password); err != nil {
+		failFor(err)
+	}
+	return cl
+}
+
+// registerAccount 完成注册交互并保存凭证，返回可继续使用的客户端。
+// name 为空时交互输入；用户取消时返回非 nil 的 err。
+func registerAccount(cfg config.ClientConfig, name string) (*client.Client, string, string, error) {
 	cl, err := client.New(cfg)
 	if err != nil {
 		fail(exitNetwork, "%v", err)
 	}
-	name := g.username
+	fmt.Println("提示：注册用户名请使用本人姓名的全拼（例如 zhangsan）。")
 	if name == "" {
-		fmt.Println("注册用户名请使用本人姓名的全拼（例如 zhangsan）。")
 		name, err = cliui.Input("用户名（姓名全拼）", currentUser(), validateLocalUsername)
 		if canceledByUser(err) {
-			return nil
+			return nil, "", "", cliui.ErrCanceled
 		}
 		if err != nil {
 			fail(exitUsage, "读取用户名失败: %v", err)
@@ -1359,24 +1218,18 @@ func registerNew(g globals, cfg config.ClientConfig) *client.Client {
 	}
 	password, ok := promptNewPassword()
 	if !ok {
-		return nil
+		return nil, "", "", cliui.ErrCanceled
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	resp, err := cl.Register(ctx, name, password)
-	cancel()
 	if err != nil {
 		failFor(err)
 	}
 	fmt.Printf("注册成功: %s\n", resp.Username)
 	saveClientCredentials(resp.Username, password)
 	printCredentialsSaved()
-	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
-	err = cl.Login(ctx, resp.Username, password)
-	cancel()
-	if err != nil {
-		failFor(err)
-	}
-	return cl
+	return cl, resp.Username, password, nil
 }
 
 // hasSavedCredentials 报告是否存在与当前服务器匹配的本地凭证。
@@ -1541,37 +1394,9 @@ func saveClientCredentials(username, password string) {
 	}
 }
 
-func splitArgs(args []string, boolFlags map[string]bool) ([]string, []string) {
-	var flags, pos []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if !strings.HasPrefix(a, "-") || a == "-" {
-			pos = append(pos, a)
-			continue
-		}
-		name := strings.TrimLeft(a, "-")
-		if j := strings.IndexByte(name, '='); j >= 0 {
-			flags = append(flags, a)
-			continue
-		}
-		flags = append(flags, a)
-		if boolFlags[name] {
-			continue
-		}
-		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			i++
-			flags = append(flags, args[i])
-		}
-	}
-	return flags, pos
-}
-
 func currentUser() string {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return u.Username
-	}
-	if v := os.Getenv("USER"); v != "" {
-		return v
 	}
 	return "unknown"
 }

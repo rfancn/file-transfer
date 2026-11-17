@@ -20,7 +20,7 @@
       },
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer"
+        "arn:aws:s3:::{{HOME_BUCKET}}"
       ]
     },
     {
@@ -33,7 +33,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/inbound/*"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/inbound/*"
       ]
     },
     {
@@ -46,7 +46,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/upload/*"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/upload/*"
       ]
     },
     {
@@ -58,7 +58,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/outbound/*"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/outbound/*"
       ]
     },
     {
@@ -67,7 +67,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/inbound/.keep"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/inbound/.keep"
       ]
     },
     {
@@ -76,7 +76,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/outbound/.keep"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/outbound/.keep"
       ]
     },
     {
@@ -85,7 +85,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/*/upload/.keep"
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/upload/.keep"
       ]
     },
     {
@@ -95,7 +95,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer"
+        "arn:aws:s3:::{{HOME_BUCKET}}"
       ]
     }
   ],

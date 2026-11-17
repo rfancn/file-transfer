@@ -12,7 +12,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer"
+        "arn:aws:s3:::{{HOME_BUCKET}}"
       ]
     },
     {
@@ -38,7 +38,7 @@
       },
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer"
+        "arn:aws:s3:::{{HOME_BUCKET}}"
       ]
     },
     {
@@ -52,7 +52,7 @@
       ],
       "Effect": "Allow",
       "Resource": [
-        "arn:aws:s3:::file-transfer/${aws:username}/upload/*"
+        "arn:aws:s3:::{{HOME_BUCKET}}/${aws:username}/upload/*"
       ]
     },
     {
@@ -62,8 +62,67 @@
       ],
       "Effect": "Deny",
       "Resource": [
-        "arn:aws:s3:::file-transfer/${aws:username}/upload/.keep",
-        "arn:aws:s3:::file-transfer/${aws:username}/upload/"
+        "arn:aws:s3:::{{HOME_BUCKET}}/${aws:username}/upload/.keep",
+        "arn:aws:s3:::{{HOME_BUCKET}}/${aws:username}/upload/"
+      ]
+    },
+    {
+      "Action": [
+        "s3:HeadBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "s3:delimiter": "/"
+        },
+        "StringLikeIfExists": {
+          "s3:prefix": [
+            "",
+            "{{SHARED_DIR_PREFIXES}}"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "{{SHARED_DIR_PREFIXES}}"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectAttributes",
+        "s3:GetObjectTagging",
+        "s3:GetObjectRetention",
+        "s3:GetObjectLegalHold"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "{{SHARED_DIR_OBJECT_ARNS}}"
       ]
     }
   ],

@@ -30,13 +30,25 @@ func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, a
 	}
 	dataCreds, adminCreds, _ := config.LoadServiceSecrets()
 
-	mgr, err := iam.New(cfg.S3.Endpoint, accessKey, secretKey, cfg.S3.Region, cfg.S3.Bucket)
+	mgr, err := iam.New(cfg.S3.Endpoint, accessKey, secretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return res, fmt.Errorf("创建管理客户端: %w", err)
 	}
 	mgr.Policies = policies
 	if err := mgr.S3.EnsureBucket(ctx); err != nil {
-		return res, fmt.Errorf("创建桶 %s: %w", cfg.S3.Bucket, err)
+		return res, fmt.Errorf("创建桶 %s: %w", cfg.S3.HomeBucket, err)
+	}
+	sharedS3, err := s3.New(cfg.S3.Endpoint, accessKey, secretKey, cfg.S3.Region, cfg.S3.SharedBucket)
+	if err != nil {
+		return res, fmt.Errorf("创建共享桶客户端: %w", err)
+	}
+	if err := sharedS3.EnsureBucket(ctx); err != nil {
+		return res, fmt.Errorf("创建共享桶 %s: %w", cfg.S3.SharedBucket, err)
+	}
+	for _, dir := range cfg.S3.SharedDirs {
+		if err := sharedS3.PutPlaceholder(ctx, dir+"/.keep"); err != nil {
+			return res, fmt.Errorf("创建共享目录 %s: %w", dir, err)
+		}
 	}
 
 	dataExists, err := mgr.UserExists(ctx, iam.DataUser)
@@ -109,6 +121,9 @@ func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, a
 	if err := mgr.EnsureOperatorGroup(ctx); err != nil {
 		return res, fmt.Errorf("初始化操作员组: %w", err)
 	}
+	if err := mgr.EnsureSharedOperatorGroup(ctx); err != nil {
+		return res, fmt.Errorf("初始化共享操作员组: %w", err)
+	}
 
 	if err := config.SaveServiceSecrets(dataCreds, adminCreds); err != nil {
 		return res, fmt.Errorf("写入服务凭据: %w", err)
@@ -118,17 +133,17 @@ func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, a
 
 // dataCredentialsValid 用数据面身份执行一次允许的 S3 操作，验证已保存的凭据仍然有效。
 func dataCredentialsValid(ctx context.Context, cfg config.ServerConfig, creds config.Credentials) bool {
-	sm, err := s3.New(cfg.S3.Endpoint, creds.AccessKey, creds.SecretKey, cfg.S3.Region, cfg.S3.Bucket)
+	sm, err := s3.New(cfg.S3.Endpoint, creds.AccessKey, creds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return false
 	}
-	ok, err := sm.Client.BucketExists(ctx, cfg.S3.Bucket)
+	ok, err := sm.Client.BucketExists(ctx, cfg.S3.HomeBucket)
 	return err == nil && ok
 }
 
 // adminCredentialsValid 用管理面身份查询自身信息，验证已保存的凭据仍然有效。
 func adminCredentialsValid(ctx context.Context, cfg config.ServerConfig, creds config.Credentials) bool {
-	m, err := iam.New(cfg.S3.Endpoint, creds.AccessKey, creds.SecretKey, cfg.S3.Region, cfg.S3.Bucket)
+	m, err := iam.New(cfg.S3.Endpoint, creds.AccessKey, creds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {
 		return false
 	}

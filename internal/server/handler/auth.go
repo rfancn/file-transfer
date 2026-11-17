@@ -196,11 +196,11 @@ func (h *Handler) isRegisteredUser(ctx context.Context, username string) bool {
 }
 
 func (h *Handler) verifyUser(ctx context.Context, username, password string) error {
-	uc, err := s3.New(h.Cfg.S3.Endpoint, username, password, h.Cfg.S3.Region, h.Cfg.S3.Bucket)
+	uc, err := s3.New(h.Cfg.S3.Endpoint, username, password, h.Cfg.S3.Region, h.Cfg.S3.HomeBucket)
 	if err != nil {
 		return err
 	}
-	ch := uc.Client.ListObjects(ctx, h.Cfg.S3.Bucket, minio.ListObjectsOptions{
+	ch := uc.Client.ListObjects(ctx, h.Cfg.S3.HomeBucket, minio.ListObjectsOptions{
 		Prefix: username + "/inbound/", Recursive: true, MaxKeys: 1,
 	})
 	for obj := range ch {
