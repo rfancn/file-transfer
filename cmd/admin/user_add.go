@@ -43,10 +43,10 @@ type groupOption struct {
 
 var groupOptions = []groupOption{
 	{iam.UserGroup, "user", "普通用户组 (ft-user-group)", "用户", ""},
-	{iam.AdminGroup, "operator", "操作员组 (ft-operator-group)", "操作员",
-		"警告：操作员可以读取所有用户的 outbound，并向所有用户 inbound 放件/删除文件。"},
-	{iam.SharedAdminGroup, "shared-operator", "共享操作员组 (shared-operator-group)", "共享操作员",
-		"警告：共享操作员可以读取、上传和删除共享桶中的全部内容。"},
+	{iam.AdminGroup, "operator", "摆渡文件操作员组 (ft-operator-group)", "摆渡文件操作员",
+		"警告：摆渡文件操作员可以读取所有用户的 outbound，并向所有用户 inbound 放件/删除文件。"},
+	{iam.SharedAdminGroup, "shared-operator", "共享文件操作员组 (shared-operator-group)", "共享文件操作员",
+		"警告：共享文件操作员可以读取、上传和删除共享桶中的全部内容。"},
 }
 
 // resolveGroup 把别名或组名解析为组选项；group 为空时交互选择。

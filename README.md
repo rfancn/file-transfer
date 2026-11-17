@@ -337,7 +337,7 @@ ft-admin user add zhangsan
 ft-client register
 ```
 
-交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 操作员组 / 共享操作员组。选择高权限组会显示警告并要求二次确认；非交互执行必须用 `--group user`、`--group operator` 或 `--group shared-operator` 指定组，创建高权限账号还需要 `--yes`。
+交互式执行 `ft-admin user add` 时会弹出用户组菜单：普通用户组 / 摆渡文件操作员组 / 共享文件操作员组。选择高权限组会显示警告并要求二次确认；非交互执行必须用 `--group user`、`--group operator` 或 `--group shared-operator` 指定组，创建高权限账号还需要 `--yes`。
 
 ```sh
 # 添加共享操作员
