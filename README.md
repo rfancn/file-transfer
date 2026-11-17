@@ -533,6 +533,7 @@ ADMIN_PASSWORD=...
 ## 安全边界
 
 - 客户端支持 `http://` 和 `https://` 服务端地址；跨不可信网络时应使用 HTTPS。
+- `ft-server` 位于反向代理（如 Traefik）之后且使用自签名或内部 CA 证书时，可在 `ft-client` 配置中设置 `server.ca_cert` 指向签发该证书的 CA PEM；临时调试可用 `server.insecure_skip_verify = true`，两者不能同时设置。
 - `ft-server` 的管理端口不应暴露到不可信网络。
 - `ft-server` 不向客户端下发 S3 凭据；所有 RustFS 操作由服务身份代理。
 - `ft-client` 以明文保存账号密码（0600）；不需要自动登录时删除 `~/.file-transfer`。

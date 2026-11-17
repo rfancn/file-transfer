@@ -39,6 +39,24 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+func TestClientConfigLoadsTLSFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[server]\n  url = \"https://ft-server:8443\"\n  ca_cert = \"/etc/file-transfer/ca.pem\"\n  insecure_skip_verify = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ccfg, err := LoadClient(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ccfg.Server.CACert != "/etc/file-transfer/ca.pem" {
+		t.Fatalf("ca_cert = %q", ccfg.Server.CACert)
+	}
+	if !ccfg.Server.InsecureSkipVerify {
+		t.Fatal("insecure_skip_verify 应为 true")
+	}
+}
+
 func TestClientConfigLoads(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -51,6 +69,9 @@ func TestClientConfigLoads(t *testing.T) {
 	}
 	if ccfg.Server.URL != "http://ft-server:8080" {
 		t.Fatalf("url = %q", ccfg.Server.URL)
+	}
+	if ccfg.Server.CACert != "" || ccfg.Server.InsecureSkipVerify {
+		t.Fatalf("TLS 选项默认应为空: %+v", ccfg.Server)
 	}
 	if ccfg.Upload.WarnFiles != DefaultUploadWarnFiles || ccfg.Upload.WarnSize != DefaultUploadWarnSize {
 		t.Fatalf("upload defaults = %+v", ccfg.Upload)

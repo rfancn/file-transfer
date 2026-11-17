@@ -99,6 +99,10 @@ type ServerConfig struct {
 
 type ClientSection struct {
 	URL string `toml:"url"`
+	// CACert 指定用于校验服务端证书的 PEM 文件；为空时使用系统根证书库。
+	CACert string `toml:"ca_cert"`
+	// InsecureSkipVerify 跳过服务端证书校验，仅用于自签名证书的调试场景。
+	InsecureSkipVerify bool `toml:"insecure_skip_verify"`
 }
 
 // UploadSection 控制上传前的数据量提示阈值；0 表示关闭对应提示。
