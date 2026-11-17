@@ -40,7 +40,6 @@ func TestParseSize(t *testing.T) {
 }
 
 func TestClientConfigLoads(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[server]\n  url = \"http://ft-server:8080\"\n"), 0o644); err != nil {
@@ -62,7 +61,6 @@ func TestClientConfigLoads(t *testing.T) {
 }
 
 func TestClientDownloadNameWidthConfig(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := "[server]\n  url = \"http://ft-server:8080\"\n[download]\n  name_width = 60\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -78,7 +76,6 @@ func TestClientDownloadNameWidthConfig(t *testing.T) {
 }
 
 func TestClientUploadWarningConfig(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := "[server]\n  url = \"http://ft-server:8080\"\n[upload]\n  warn_files = 5\n  warn_size = \"2G\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -94,7 +91,6 @@ func TestClientUploadWarningConfig(t *testing.T) {
 }
 
 func TestClientUploadWarningInvalidSize(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := "[server]\n  url = \"http://ft-server:8080\"\n[upload]\n  warn_size = \"bad\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -106,7 +102,6 @@ func TestClientUploadWarningInvalidSize(t *testing.T) {
 }
 
 func TestLoadAdminFromClientTOML(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[server]\n  url = \"http://ft-server:8080\"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -120,11 +115,7 @@ func TestLoadAdminFromClientTOML(t *testing.T) {
 	}
 }
 
-func TestAdminEnvConfigLoads(t *testing.T) {
-	t.Setenv("RUSTFS_ACCESS_KEY", "")
-	t.Setenv("RUSTFS_SECRET_KEY", "")
-	t.Setenv("FT_SERVER_URL", "")
-
+func TestAdminConfigLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.toml")
 	if err := os.WriteFile(path, []byte("[server]\n  url = \"http://ft-server:8080\"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -150,19 +141,29 @@ func TestDefaultServerConfig(t *testing.T) {
 
 func TestLoadServerDefaults(t *testing.T) {
 	t.Setenv("FT_S3_ENDPOINT", "")
-	t.Setenv("FT_BUCKET", "")
-	t.Setenv("FT_TOKEN_SECRET", "")
-	t.Setenv("FT_UPLOAD_SECRET", "")
 
-	cfg, err := LoadServer(filepath.Join(t.TempDir(), "missing.toml"))
-	if err != nil {
-		t.Fatal(err)
+	cfg := DefaultServer()
+	if cfg.S3.HomeBucket != "home" || cfg.S3.SharedBucket != "shared" {
+		t.Fatalf("默认桶名不符: %+v", cfg.S3)
 	}
-	if cfg.S3.Endpoint == "" || cfg.S3.Bucket == "" {
-		t.Fatalf("默认 S3 配置不完整: %+v", cfg.S3)
+	if len(cfg.S3.SharedDirs) != 2 || cfg.S3.SharedDirs[0] != "software" || cfg.S3.SharedDirs[1] != "document" {
+		t.Fatalf("默认共享目录不符: %+v", cfg.S3.SharedDirs)
 	}
 	if cfg.Auth.TokenSecret != DefaultTokenSecret || cfg.Auth.UploadSecret != DefaultUploadSecret {
 		t.Fatalf("默认 auth 密钥不符: %+v", cfg.Auth)
+	}
+}
+
+func TestLoadExplicitMissingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.toml")
+	if _, err := LoadServer(path); err == nil || !strings.Contains(err.Error(), "配置文件不存在") {
+		t.Fatalf("LoadServer 显式路径缺失应报错，得到 %v", err)
+	}
+	if _, err := LoadClient(path); err == nil || !strings.Contains(err.Error(), "配置文件不存在") {
+		t.Fatalf("LoadClient 显式路径缺失应报错，得到 %v", err)
+	}
+	if _, err := LoadAdmin(path); err == nil || !strings.Contains(err.Error(), "配置文件不存在") {
+		t.Fatalf("LoadAdmin 显式路径缺失应报错，得到 %v", err)
 	}
 }
 
@@ -205,8 +206,6 @@ func TestEnsureAuthSecrets(t *testing.T) {
 }
 
 func TestServiceSecretsRoundTrip(t *testing.T) {
-	t.Setenv("FT_TOKEN_SECRET", "")
-	t.Setenv("FT_UPLOAD_SECRET", "")
 
 	cfg := DefaultServer()
 	data := Credentials{AccessKey: "ft-data", SecretKey: "data-secret"}
@@ -287,8 +286,6 @@ func TestServerRetentionDefaults(t *testing.T) {
 }
 
 func TestLoadAdminAllowsMissingServerURL(t *testing.T) {
-	t.Setenv("FT_SERVER_URL", "")
-
 	path := filepath.Join(t.TempDir(), "admin.conf")
 	if err := os.WriteFile(path, []byte("# empty\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -300,28 +297,62 @@ func TestLoadAdminAllowsMissingServerURL(t *testing.T) {
 	if cfg.Server.URL != "" {
 		t.Fatalf("url = %q, want empty", cfg.Server.URL)
 	}
-
-	t.Setenv("FT_SERVER_URL", "http://127.0.0.1:8080")
-	cfg, err = LoadAdmin(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Server.URL != "http://127.0.0.1:8080" {
-		t.Fatalf("url = %q", cfg.Server.URL)
-	}
 }
 
 func TestLoadServerRejectsEmptySecrets(t *testing.T) {
-	t.Setenv("FT_TOKEN_SECRET", "")
-	t.Setenv("FT_UPLOAD_SECRET", "")
 
 	path := filepath.Join(t.TempDir(), "ft-server.toml")
-	content := "[s3]\nendpoint = \"http://127.0.0.1:9000\"\nbucket = \"file-transfer\"\n[auth]\ntoken_secret = \"\"\nupload_secret = \"\"\n"
+	content := "[s3]\nendpoint = \"http://127.0.0.1:9000\"\nhome_bucket = \"file-transfer\"\n[auth]\ntoken_secret = \"\"\nupload_secret = \"\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadServer(path); err == nil {
 		t.Fatal("空的 auth 密钥应导致加载失败")
+	}
+}
+
+func TestLoadServerRejectsLegacyBucket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ft-server.toml")
+	content := "[s3]\nendpoint = \"http://127.0.0.1:9000\"\nbucket = \"file-transfer\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadServer(path)
+	if err == nil || !strings.Contains(err.Error(), "s3.home_bucket") {
+		t.Fatalf("旧 s3.bucket 应报错，得到 %v", err)
+	}
+}
+
+func TestLoadServerValidatesBucketsAndDirs(t *testing.T) {
+	t.Setenv("FT_S3_ENDPOINT", "")
+	base := DefaultServer()
+	base.Auth.TokenSecret = "token"
+	base.Auth.UploadSecret = "upload"
+
+	cases := []struct {
+		name   string
+		mutate func(*ServerConfig)
+		want   string
+	}{
+		{"empty home", func(c *ServerConfig) { c.S3.HomeBucket = "" }, "s3.home_bucket"},
+		{"empty shared", func(c *ServerConfig) { c.S3.SharedBucket = "" }, "s3.shared_bucket"},
+		{"same bucket", func(c *ServerConfig) { c.S3.SharedBucket = c.S3.HomeBucket }, "不能相同"},
+		{"empty dirs", func(c *ServerConfig) { c.S3.SharedDirs = nil }, "至少包含一个目录"},
+		{"bad bucket char", func(c *ServerConfig) { c.S3.HomeBucket = "bad:bucket" }, "s3.home_bucket"},
+		{"uppercase bucket", func(c *ServerConfig) { c.S3.HomeBucket = "MyBucket" }, "s3.home_bucket"},
+		{"ip bucket", func(c *ServerConfig) { c.S3.HomeBucket = "192.168.1.1" }, "s3.home_bucket"},
+		{"bad dir", func(c *ServerConfig) { c.S3.SharedDirs = []string{"software/v1"} }, "s3.shared_dirs"},
+		{"dot dir", func(c *ServerConfig) { c.S3.SharedDirs = []string{".."} }, "s3.shared_dirs"},
+		{"duplicate dir", func(c *ServerConfig) { c.S3.SharedDirs = []string{"software", "software"} }, "重复目录"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := base
+			c.mutate(&cfg)
+			if err := cfg.validateS3(); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("期望错误包含 %q，得到 %v", c.want, err)
+			}
+		})
 	}
 }
 
@@ -347,16 +378,13 @@ func TestLogConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"[log]", "max_age_days = 30", "max_backups = 30", "max_size_mb = 100", "compress = true", "  listen = ", "  log_file = ", "[retention]", "inbound_days = 3", "[limits]", "max_concurrent = 4", "queue_timeout = \"10s\""} {
+	for _, want := range []string{"[log]", "max_age_days = 30", "max_backups = 30", "max_size_mb = 100", "compress = true", "  listen = ", "  log_file = ", "[retention]", "inbound_days = 3", "[limits]", "max_concurrent = 4", "queue_timeout = \"10s\"", "home_bucket = \"home\"", "shared_bucket = \"shared\"", "shared_dirs = [\"software\", \"document\"]"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("生成的配置缺少 %q: %s", want, content)
 		}
 	}
 
-	t.Setenv("FT_TOKEN_SECRET", "")
-	t.Setenv("FT_UPLOAD_SECRET", "")
 	t.Setenv("FT_S3_ENDPOINT", "")
-	t.Setenv("FT_BUCKET", "")
 	loaded, err := LoadServer(path)
 	if err != nil {
 		t.Fatalf("生成的 TOML 无法解析: %v", err)

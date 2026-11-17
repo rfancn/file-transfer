@@ -63,9 +63,6 @@ func localClientInfo() (string, string) {
 	if u, err := osuser.Current(); err == nil {
 		name = u.Username
 	}
-	if name == "" {
-		name = os.Getenv("USER")
-	}
 	host, _ := os.Hostname()
 	return name, host
 }

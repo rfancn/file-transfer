@@ -22,6 +22,7 @@ var reserved = map[string]struct{}{
 	"root": {}, "ft-admin": {}, "ft-data": {}, "ft-operator": {},
 	"ft-server-data": {}, "ft-server-admin": {}, "ft-copy-out": {},
 	"ft-user-group": {}, "ft-operator-group": {}, "ft-admin-group": {},
+	"shared-operator-group": {}, "shared-operator-policy": {},
 	"ft-download-svc": {}, "ft-copyout-svc": {}, "copyin": {}, "copyout": {},
 }
 

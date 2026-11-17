@@ -8,14 +8,18 @@
 
 ## 1. 目标
 
-在 RustFS 的 `file-transfer` 桶中，为每个用户提供三个隔离目录：
+个人数据存放在 RustFS 的 `home` 桶中，为每个用户提供三个隔离目录；公共资料存放在 `shared` 桶中：
 
 ```text
-file-transfer/
+home/
 └── <username>/
     ├── inbound/                    # 外网 → 内网
     ├── outbound/<YYYYMMDDNN>/      # 内网 → 外网，按上传批次组织
     └── upload/                     # 工作网 → 服务器网
+
+shared/
+├── software/                       # 共享目录，s3.shared_dirs 可配置
+└── document/
 ```
 
 - 服务器网只使用 `ft-client`，不直连 RustFS、不接触 S3 凭据。
@@ -53,13 +57,16 @@ file-transfer/
 | `ft-data`（数据面） | List、Get | List、Put | List、Get |
 | `ft-admin`（管理面） | 管理、删除 | 管理、删除 | 管理、删除 |
 | `ft-operator-group`（操作员组） | List、Put、递归 List、Delete（`.keep` 除外） | List、Get | 无 |
+| `shared-operator-group`（共享操作员组） | 共享桶：List、Get、Put、Delete；不能删除桶 | — | — |
 | `ft-client`（经 ft-server） | List、Get | List、Put | List、Get |
 
 - 用户个人策略限制在自己的 `<username>/` 前缀内。
 - `ft-data` 只写 `outbound`，只读 `inbound`/`upload`，并可为三个目录创建 `.keep` 占位。
 - `ft-operator-group` 可浏览所有用户的 `inbound`/`outbound`，可递归列出并删除 `inbound` 内容；`inbound/.keep` 显式 Deny 删除；不能进入 `upload`。
 - 普通用户在 Console/Cyberduck 中只能操作自己的 `inbound`/`outbound`/`upload`：三个目录都可列出，`upload/*` 可写入和删除，但 `upload/.keep` 受 Deny 保护，不能删除 `upload` 目录本身；`inbound`/`outbound` 不可下载、不可写入、不可删除。
-- 用户组策略不授予 `s3:ListAllMyBuckets`，桶根目录不可列；Cyberduck 默认路径需设为 `<bucket>/<username>`。
+- 用户组策略不授予 `s3:ListAllMyBuckets`，home 桶根目录不可列；Cyberduck 默认路径需设为 `home/<username>`。
+- 普通用户组对 `shared` 桶只能列出桶根和 `s3.shared_dirs` 配置目录，并读取这些目录下的对象。
+- `shared-operator-group` 对 `shared` 桶有 list/get/put/delete，但显式 Deny 删除桶，且不包含 `admin:*` 权限。
 
 ## 4. ft-server
 
@@ -106,7 +113,9 @@ file-transfer/
 
 [s3]
   endpoint = "http://127.0.0.1:9000"
-  bucket = "file-transfer"
+  home_bucket = "home"
+  shared_bucket = "shared"
+  shared_dirs = ["software", "document"]
   region = "us-east-1"
 
 [auth]
@@ -151,7 +160,7 @@ file-transfer/
 - 大小支持 `B/KiB/MiB/GiB/TiB` 及 `K/M/G/T` 简写。
 - `token_secret`/`upload_secret` 为示例默认值或空时，启动自动生成随机密钥并写回。
 - `secrets/s3_credentials.json`（0600）保存 `ft-data`/`ft-admin` 凭据；管理员账号保存在 `secrets/user.json`。
-- 环境变量可覆盖：`FT_SERVER_CONFIG`、`FT_S3_ENDPOINT`、`FT_BUCKET`、`FT_TOKEN_SECRET`、`FT_UPLOAD_SECRET`。
+- 环境变量只保留 `FT_S3_ENDPOINT`；其他配置项均从配置文件读取。
 
 ### 4.3 分片上传
 
@@ -200,7 +209,7 @@ event=audit action actor actor_type target result request_id remote_ip
 
 ### 5.1 启动与凭证
 
-- 默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c` 或 `FT_CLIENT_CONFIG` 覆盖。
+- 默认读取 `/etc/file-transfer/ft-client.toml`，可用 `-c` 或 `--config` 覆盖。
 - 本地凭证保存在 `~/.file-transfer`（TOML，0600）：
 
 ```toml
@@ -259,8 +268,8 @@ password = "Abcd1234!"
 
 ## 6. ft-admin
 
-- 默认读取 `/etc/file-transfer/ft-client.toml`（TOML，与 ft-client 共用），只读取 `[server] url`；可用 `-c` 或 `FT_ADMIN_CONFIG` 覆盖。
-- 管理员凭证通过 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` 提供。
+- 默认读取 `/etc/file-transfer/ft-client.toml`（TOML，与 ft-client 共用），只读取 `[server] url`；可用 `-c` 或 `--config` 覆盖。
+- 管理员凭证通过 `--admin-user` / `--admin-password` 提供，否则交互输入。
 - 交互使用 promptui：菜单、输入、密码遮罩、确认；ESC 返回、Ctrl+C 退出。
 - 菜单功能：添加用户、删除用户、重置密码、列出用户、清理数据、初始化。
 - 删除用户和清理数据需要确认；非交互使用 `--yes`。

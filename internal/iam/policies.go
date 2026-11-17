@@ -6,67 +6,113 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const (
-	policyUserGroupFile  = "user-group.json"
-	policyOperatorFile   = "operator-group.json"
-	policyServerDataFile = "server-data.json"
-	policyServerAdmin    = "server-admin.json"
+	policyUserGroupFile      = "user-group.json"
+	policyOperatorFile       = "operator-group.json"
+	policySharedOperatorFile = "shared-operator-group.json"
+	policyServerDataFile     = "server-data.json"
+	policyServerAdmin        = "server-admin.json"
 )
+
+// PolicyOptions 是策略模板渲染所需的桶和目录配置。
+type PolicyOptions struct {
+	HomeBucket   string
+	SharedBucket string
+	SharedDirs   []string
+}
 
 // Policies 保存从 policy 目录加载的 IAM 策略。
 type Policies struct {
-	Group    []byte
-	Operator []byte
-	Data     []byte
-	Admin    []byte
+	Group          []byte
+	Operator       []byte
+	SharedOperator []byte
+	Data           []byte
+	Admin          []byte
 }
 
-// LoadPolicies 从 dir 读取策略文件并校验 JSON。
-func LoadPolicies(dir string) (*Policies, error) {
+// LoadPolicies 从 dir 读取策略文件，按 opts 渲染占位符并校验 JSON。
+func LoadPolicies(dir string, opts PolicyOptions) (*Policies, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("policy 目录不能为空")
 	}
+	if strings.TrimSpace(opts.HomeBucket) == "" || strings.TrimSpace(opts.SharedBucket) == "" {
+		return nil, errors.New("策略渲染需要 home/shared 桶名")
+	}
 
-	group, err := loadPolicyFile(dir, policyUserGroupFile)
+	group, err := loadPolicyFile(dir, policyUserGroupFile, opts)
 	if err != nil {
 		return nil, err
 	}
-	operator, err := loadPolicyFile(dir, policyOperatorFile)
+	operator, err := loadPolicyFile(dir, policyOperatorFile, opts)
 	if err != nil {
 		return nil, err
 	}
-	data, err := loadPolicyFile(dir, policyServerDataFile)
+	sharedOperator, err := loadPolicyFile(dir, policySharedOperatorFile, opts)
 	if err != nil {
 		return nil, err
 	}
-	admin, err := loadPolicyFile(dir, policyServerAdmin)
+	data, err := loadPolicyFile(dir, policyServerDataFile, opts)
+	if err != nil {
+		return nil, err
+	}
+	admin, err := loadPolicyFile(dir, policyServerAdmin, opts)
 	if err != nil {
 		return nil, err
 	}
 	return &Policies{
-		Group:    group,
-		Operator: operator,
-		Data:     data,
-		Admin:    admin,
+		Group:          group,
+		Operator:       operator,
+		SharedOperator: sharedOperator,
+		Data:           data,
+		Admin:          admin,
 	}, nil
 }
 
-func loadPolicyFile(dir, name string) ([]byte, error) {
+func loadPolicyFile(dir, name string, opts PolicyOptions) ([]byte, error) {
 	path := filepath.Join(dir, name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取策略 %s: %w", path, err)
 	}
-	if strings.Contains(string(raw), "{{") || strings.Contains(string(raw), "}}") {
-		return nil, fmt.Errorf("策略 %s 包含未知占位符", path)
+	rendered, err := renderPolicy(path, raw, opts)
+	if err != nil {
+		return nil, err
 	}
-	if err := validatePolicyJSON(raw); err != nil {
+	if err := validatePolicyJSON(rendered); err != nil {
 		return nil, fmt.Errorf("策略 %s JSON 无效: %w", path, err)
 	}
-	return raw, nil
+	return rendered, nil
+}
+
+// renderPolicy 替换策略模板中的桶名和共享目录占位符。
+// 目录占位符必须作为独立的 JSON 字符串元素使用，替换结果自带引号。
+func renderPolicy(path string, raw []byte, opts PolicyOptions) ([]byte, error) {
+	text := string(raw)
+	if (strings.Contains(text, "{{SHARED_DIR_PREFIXES}}") || strings.Contains(text, "{{SHARED_DIR_OBJECT_ARNS}}")) && len(opts.SharedDirs) == 0 {
+		return nil, fmt.Errorf("策略 %s 需要至少一个共享目录", path)
+	}
+
+	prefixes := make([]string, 0, len(opts.SharedDirs)*2)
+	arns := make([]string, 0, len(opts.SharedDirs))
+	for _, dir := range opts.SharedDirs {
+		prefixes = append(prefixes, strconv.Quote(dir+"/"), strconv.Quote(dir+"/*"))
+		arns = append(arns, strconv.Quote("arn:aws:s3:::"+opts.SharedBucket+"/"+dir+"/*"))
+	}
+	replacer := strings.NewReplacer(
+		`"{{SHARED_DIR_PREFIXES}}"`, strings.Join(prefixes, ", "),
+		`"{{SHARED_DIR_OBJECT_ARNS}}"`, strings.Join(arns, ", "),
+		"{{HOME_BUCKET}}", opts.HomeBucket,
+		"{{SHARED_BUCKET}}", opts.SharedBucket,
+	)
+	rendered := replacer.Replace(text)
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		return nil, fmt.Errorf("策略 %s 包含未知占位符", path)
+	}
+	return []byte(rendered), nil
 }
 
 func validatePolicyJSON(raw []byte) error {

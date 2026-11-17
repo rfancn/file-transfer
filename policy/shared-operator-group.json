@@ -1,0 +1,85 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "s3:HeadBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketAcl",
+        "s3:GetBucketPolicyStatus",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketTagging"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    },
+    {
+      "Action": [
+        "s3:ListMultipartUploadParts",
+        "s3:AbortMultipartUpload"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectAttributes",
+        "s3:GetObjectTagging",
+        "s3:GetObjectRetention",
+        "s3:GetObjectLegalHold"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:DeleteObjectTagging"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}/*"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}/*/.keep"
+      ]
+    },
+    {
+      "Action": [
+        "s3:DeleteBucket"
+      ],
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:s3:::{{SHARED_BUCKET}}"
+      ]
+    }
+  ],
+  "Version": "2012-10-17"
+}

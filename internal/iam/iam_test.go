@@ -8,22 +8,41 @@ import (
 	"testing"
 )
 
+// policyDoc 是测试断言策略 JSON 时使用的通用结构。
+type policyDoc struct {
+	Statement []struct {
+		Effect    string
+		Action    []string
+		Resource  []string
+		Condition map[string]map[string]any
+	}
+}
+
 func loadTestPolicies(t *testing.T) *Policies {
 	t.Helper()
-	p, err := LoadPolicies(filepath.Join("..", "..", "policy"))
+	p, err := LoadPolicies(filepath.Join("..", "..", "policy"), testPolicyOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
+func testPolicyOptions() PolicyOptions {
+	return PolicyOptions{
+		HomeBucket:   "home",
+		SharedBucket: "shared",
+		SharedDirs:   []string{"software", "document"},
+	}
+}
+
 func TestPoliciesValidJSON(t *testing.T) {
 	p := loadTestPolicies(t)
 	pols := map[string][]byte{
-		"group":        p.Group,
-		"operator":     p.Operator,
-		"server-data":  p.Data,
-		"server-admin": p.Admin,
+		"group":           p.Group,
+		"operator":        p.Operator,
+		"shared-operator": p.SharedOperator,
+		"server-data":     p.Data,
+		"server-admin":    p.Admin,
 	}
 	for name, raw := range pols {
 		var v any
@@ -38,13 +57,7 @@ func TestPoliciesValidJSON(t *testing.T) {
 
 func TestUserGroupPolicyUploadScope(t *testing.T) {
 	p := loadTestPolicies(t)
-	var doc struct {
-		Statement []struct {
-			Effect   string
-			Action   []string
-			Resource []string
-		}
-	}
+	var doc policyDoc
 	if err := json.Unmarshal(p.Group, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -57,15 +70,22 @@ func TestUserGroupPolicyUploadScope(t *testing.T) {
 		"s3:DeleteObjectVersion":      true,
 	}
 	seenAllow := map[string]bool{}
-	uploadResource := "arn:aws:s3:::file-transfer/${aws:username}/upload/*"
+	uploadResource := "arn:aws:s3:::home/${aws:username}/upload/*"
 	protectResources := map[string]bool{
-		"arn:aws:s3:::file-transfer/${aws:username}/upload/.keep": false,
-		"arn:aws:s3:::file-transfer/${aws:username}/upload/":      false,
+		"arn:aws:s3:::home/${aws:username}/upload/.keep": false,
+		"arn:aws:s3:::home/${aws:username}/upload/":      false,
 	}
 	for _, st := range doc.Statement {
 		for _, action := range st.Action {
-			if action == "s3:GetObject" || action == "s3:ListAllMyBuckets" || action == "s3:ListBucketMultipartUploads" {
+			if action == "s3:ListAllMyBuckets" || action == "s3:ListBucketMultipartUploads" {
 				t.Fatalf("user group must not grant %s", action)
+			}
+			if action == "s3:GetObject" {
+				for _, res := range st.Resource {
+					if !strings.HasPrefix(res, "arn:aws:s3:::shared/") {
+						t.Fatalf("user group GetObject outside shared dirs: %s", res)
+					}
+				}
 			}
 			if !allowActions[action] || st.Effect != "Allow" {
 				continue
@@ -124,13 +144,7 @@ func TestUserGroupPolicyUploadScope(t *testing.T) {
 
 func TestUserGroupCanListOwnDirs(t *testing.T) {
 	p := loadTestPolicies(t)
-	var doc struct {
-		Statement []struct {
-			Effect    string
-			Action    []string
-			Condition map[string]map[string]any
-		}
-	}
+	var doc policyDoc
 	if err := json.Unmarshal(p.Group, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +190,7 @@ func TestOperatorPolicyHasNoAdminActions(t *testing.T) {
 
 func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
 	p := loadTestPolicies(t)
-	var doc struct {
-		Statement []struct {
-			Effect   string
-			Action   []string
-			Resource []string
-		}
-	}
+	var doc policyDoc
 	if err := json.Unmarshal(p.Operator, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -223,13 +231,7 @@ func TestOperatorPolicyCanDeleteInbound(t *testing.T) {
 
 func TestOperatorPolicyAllowsRecursiveInboundList(t *testing.T) {
 	p := loadTestPolicies(t)
-	var doc struct {
-		Statement []struct {
-			Effect    string
-			Action    []string
-			Condition map[string]map[string]any
-		}
-	}
+	var doc policyDoc
 	if err := json.Unmarshal(p.Operator, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -293,10 +295,136 @@ func TestServerDataPolicyKeepsPlaceholders(t *testing.T) {
 	}
 }
 
+func TestUserGroupSharedReadOnly(t *testing.T) {
+	p := loadTestPolicies(t)
+	text := string(p.Group)
+	for _, want := range []string{
+		"arn:aws:s3:::shared/software/*",
+		"arn:aws:s3:::shared/document/*",
+		`"software/"`, `"software/*"`, `"document/"`, `"document/*"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("user group missing shared read %q", want)
+		}
+	}
+
+	var doc policyDoc
+	if err := json.Unmarshal(p.Group, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range doc.Statement {
+		if st.Effect != "Allow" || !strings.Contains(strings.Join(st.Resource, " "), "arn:aws:s3:::shared") {
+			continue
+		}
+		for _, action := range st.Action {
+			switch action {
+			case "s3:PutObject", "s3:PutObjectTagging", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload":
+				t.Fatalf("user group must not grant shared write action %s", action)
+			}
+		}
+	}
+}
+
+func TestSharedOperatorPolicy(t *testing.T) {
+	p := loadTestPolicies(t)
+	text := string(p.SharedOperator)
+	for _, want := range []string{
+		"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+		"arn:aws:s3:::shared/*", `"s3:DeleteBucket"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("shared operator policy missing %q", want)
+		}
+	}
+	if strings.Contains(text, "admin:") {
+		t.Fatal("shared operator policy must not contain admin actions")
+	}
+	if strings.Contains(text, "s3:ListAllMyBuckets") {
+		t.Fatal("shared operator policy must not list all buckets")
+	}
+	if !strings.Contains(text, "/*/.keep") {
+		t.Fatal("shared operator policy must protect shared directory markers")
+	}
+
+	var doc policyDoc
+	if err := json.Unmarshal(p.SharedOperator, &doc); err != nil {
+		t.Fatal(err)
+	}
+	denyDeleteBucket := false
+	for _, st := range doc.Statement {
+		if st.Effect != "Deny" {
+			continue
+		}
+		for _, action := range st.Action {
+			if action == "s3:DeleteBucket" {
+				denyDeleteBucket = true
+			}
+		}
+	}
+	if !denyDeleteBucket {
+		t.Fatal("shared operator policy must deny DeleteBucket")
+	}
+}
+
+func TestPoliciesRenderConfiguredBucketsAndDirs(t *testing.T) {
+	p, err := LoadPolicies(filepath.Join("..", "..", "policy"), PolicyOptions{
+		HomeBucket:   "custom-home",
+		SharedBucket: "custom-shared",
+		SharedDirs:   []string{"tools", "docs"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string][]byte{
+		"group": p.Group, "operator": p.Operator, "shared-operator": p.SharedOperator,
+		"data": p.Data, "admin": p.Admin,
+	} {
+		text := string(raw)
+		if strings.Contains(text, "file-transfer") || strings.Contains(text, "{{") || strings.Contains(text, "}}") {
+			t.Fatalf("%s 未正确渲染: %s", name, text)
+		}
+	}
+	group := string(p.Group)
+	for _, want := range []string{
+		"arn:aws:s3:::custom-home/${aws:username}/upload/*",
+		"arn:aws:s3:::custom-shared/tools/*",
+		"arn:aws:s3:::custom-shared/docs/*",
+		`"tools/"`, `"tools/*"`, `"docs/"`, `"docs/*"`,
+	} {
+		if !strings.Contains(group, want) {
+			t.Fatalf("用户组策略缺少 %q: %s", want, group)
+		}
+	}
+	if !strings.Contains(string(p.SharedOperator), "arn:aws:s3:::custom-shared/*") {
+		t.Fatal("共享操作员策略未使用自定义共享桶")
+	}
+}
+
+func TestLoadPoliciesRequiresBuckets(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	if _, err := LoadPolicies(dir, PolicyOptions{}); err == nil || !strings.Contains(err.Error(), "桶名") {
+		t.Fatalf("期望缺少桶名错误，得到 %v", err)
+	}
+}
+
+func TestLoadPoliciesRequiresSharedDirs(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	tokenPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["{{SHARED_DIR_OBJECT_ARNS}}"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(tokenPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadPolicies(dir, PolicyOptions{HomeBucket: "home", SharedBucket: "shared"})
+	if err == nil || !strings.Contains(err.Error(), "至少一个共享目录") {
+		t.Fatalf("期望缺少共享目录错误，得到 %v", err)
+	}
+}
+
 func TestLoadPoliciesMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	writeValidPolicies(t, dir, policyServerAdmin)
-	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyServerAdmin) {
+	if _, err := LoadPolicies(dir, testPolicyOptions()); err == nil || !strings.Contains(err.Error(), policyServerAdmin) {
 		t.Fatalf("期望缺少 %s 的错误，得到 %v", policyServerAdmin, err)
 	}
 }
@@ -307,7 +435,7 @@ func TestLoadPoliciesInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(`{"Version":`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), policyUserGroupFile) {
+	if _, err := LoadPolicies(dir, testPolicyOptions()); err == nil || !strings.Contains(err.Error(), policyUserGroupFile) {
 		t.Fatalf("期望 %s JSON 错误，得到 %v", policyUserGroupFile, err)
 	}
 }
@@ -319,7 +447,7 @@ func TestLoadPoliciesUnknownPlaceholder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+	if _, err := LoadPolicies(dir, testPolicyOptions()); err == nil || !strings.Contains(err.Error(), "未知占位符") {
 		t.Fatalf("期望未知占位符错误，得到 %v", err)
 	}
 }
@@ -331,13 +459,13 @@ func TestLoadPoliciesResidualBrace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(bad), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadPolicies(dir); err == nil || !strings.Contains(err.Error(), "未知占位符") {
+	if _, err := LoadPolicies(dir, testPolicyOptions()); err == nil || !strings.Contains(err.Error(), "未知占位符") {
 		t.Fatalf("期望残留占位符错误，得到 %v", err)
 	}
 }
 
 func TestLoadPoliciesEmptyDir(t *testing.T) {
-	if _, err := LoadPolicies(t.TempDir()); err == nil {
+	if _, err := LoadPolicies(t.TempDir(), testPolicyOptions()); err == nil {
 		t.Fatal("空目录应返回错误")
 	}
 }
@@ -346,10 +474,11 @@ func writeValidPolicies(t *testing.T, dir, skip string) {
 	t.Helper()
 	plain := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::file-transfer/*"]}]}`
 	files := map[string]string{
-		policyUserGroupFile:  plain,
-		policyOperatorFile:   plain,
-		policyServerDataFile: plain,
-		policyServerAdmin:    plain,
+		policyUserGroupFile:      plain,
+		policyOperatorFile:       plain,
+		policySharedOperatorFile: plain,
+		policyServerDataFile:     plain,
+		policyServerAdmin:        plain,
 	}
 	for name, content := range files {
 		if name == skip {

@@ -7,14 +7,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 )
+
+var bucketNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 const (
 	DefaultClientConfig = "/etc/file-transfer/ft-client.toml"
@@ -33,9 +38,11 @@ type Credentials struct {
 }
 
 type S3Section struct {
-	Endpoint string `toml:"endpoint"`
-	Bucket   string `toml:"bucket"`
-	Region   string `toml:"region"`
+	Endpoint     string   `toml:"endpoint"`
+	HomeBucket   string   `toml:"home_bucket"`
+	SharedBucket string   `toml:"shared_bucket"`
+	SharedDirs   []string `toml:"shared_dirs"`
+	Region       string   `toml:"region"`
 }
 
 type ServerSection struct {
@@ -185,7 +192,13 @@ func DefaultServer() ServerConfig {
 			Listen:  ":8080",
 			LogFile: "/var/log/file-transfer/ft-server.log",
 		},
-		S3: S3Section{Endpoint: "http://127.0.0.1:9000", Region: "us-east-1", Bucket: "file-transfer"},
+		S3: S3Section{
+			Endpoint:     "http://127.0.0.1:9000",
+			HomeBucket:   "home",
+			SharedBucket: "shared",
+			SharedDirs:   []string{"software", "document"},
+			Region:       "us-east-1",
+		},
 		Auth: AuthSection{
 			TokenSecret:  DefaultTokenSecret,
 			UploadSecret: DefaultUploadSecret,
@@ -262,23 +275,29 @@ func DefaultAdmin() AdminConfig {
 }
 
 func LoadServer(path string) (ServerConfig, error) {
+	explicit := path != ""
 	if path == "" {
-		path = envOr("FT_SERVER_CONFIG", DefaultServerConfig)
+		path = DefaultServerConfig
 	}
 	cfg := DefaultServer()
 	if _, err := os.Stat(path); err == nil {
-		if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		md, err := toml.DecodeFile(path, &cfg)
+		if err != nil {
 			return cfg, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if md.IsDefined("s3", "bucket") {
+			return cfg, errors.New("s3.bucket 已移除，请改为 s3.home_bucket；升级时可将原值填入 home_bucket")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return cfg, err
+	} else if explicit {
+		return cfg, fmt.Errorf("配置文件不存在: %s", path)
 	}
-	applyServerEnv(&cfg)
-	if cfg.S3.Endpoint == "" {
-		return cfg, errors.New("s3.endpoint 不能为空")
+	if v := os.Getenv("FT_S3_ENDPOINT"); v != "" {
+		cfg.S3.Endpoint = v
 	}
-	if cfg.S3.Bucket == "" {
-		return cfg, errors.New("s3.bucket 不能为空")
+	if err := cfg.validateS3(); err != nil {
+		return cfg, err
 	}
 	if cfg.Auth.TokenSecret == "" {
 		return cfg, errors.New("auth.token_secret 不能为空")
@@ -299,6 +318,73 @@ func LoadServer(path string) (ServerConfig, error) {
 		return cfg, errors.New("retention 保留天数不能为负")
 	}
 	return cfg, nil
+}
+
+func validateBucketName(field, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s 不能为空", field)
+	}
+	if !bucketNameRe.MatchString(name) {
+		return fmt.Errorf("%s 必须为 3-63 位小写字母、数字、点或连字符，且首尾为字母或数字", field)
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, ".-") || strings.Contains(name, "-.") {
+		return fmt.Errorf("%s 不能包含相邻的点或连字符", field)
+	}
+	if net.ParseIP(name) != nil {
+		return fmt.Errorf("%s 不能使用 IP 地址格式", field)
+	}
+	return nil
+}
+
+func validateSharedDir(dir string) error {
+	if dir == "" {
+		return errors.New("s3.shared_dirs 不能包含空目录名")
+	}
+	if dir == "." || dir == ".." {
+		return fmt.Errorf("s3.shared_dirs 不能包含目录 %q", dir)
+	}
+	if err := validateNameChars(dir); err != nil {
+		return fmt.Errorf("s3.shared_dirs 目录 %q %w", dir, err)
+	}
+	return nil
+}
+
+func validateNameChars(name string) error {
+	for _, r := range name {
+		if unicode.IsSpace(r) || r < 0x20 || r == 0x7f || r == '/' || r == '\\' || r == ':' || r == '\'' || r == '"' || r == '*' || r == '?' || r == '{' || r == '}' {
+			return errors.New("不能包含空白、控制字符、斜杠、冒号、引号、通配符或花括号")
+		}
+	}
+	return nil
+}
+
+func (c ServerConfig) validateS3() error {
+	if c.S3.Endpoint == "" {
+		return errors.New("s3.endpoint 不能为空")
+	}
+	if err := validateBucketName("s3.home_bucket", c.S3.HomeBucket); err != nil {
+		return err
+	}
+	if err := validateBucketName("s3.shared_bucket", c.S3.SharedBucket); err != nil {
+		return err
+	}
+	if c.S3.HomeBucket == c.S3.SharedBucket {
+		return errors.New("s3.home_bucket 与 s3.shared_bucket 不能相同")
+	}
+	if len(c.S3.SharedDirs) == 0 {
+		return errors.New("s3.shared_dirs 至少包含一个目录")
+	}
+	seenDirs := make(map[string]struct{}, len(c.S3.SharedDirs))
+	for _, dir := range c.S3.SharedDirs {
+		if err := validateSharedDir(dir); err != nil {
+			return err
+		}
+		if _, ok := seenDirs[dir]; ok {
+			return fmt.Errorf("s3.shared_dirs 包含重复目录: %s", dir)
+		}
+		seenDirs[dir] = struct{}{}
+	}
+	return nil
 }
 
 func (c ServerConfig) Runtime(path string) (Runtime, error) {
@@ -450,8 +536,9 @@ func ParseSize(s string) (int64, error) {
 }
 
 func LoadClient(path string) (ClientConfig, error) {
+	explicit := path != ""
 	if path == "" {
-		path = envOr("FT_CLIENT_CONFIG", DefaultClientConfig)
+		path = DefaultClientConfig
 	}
 	cfg := DefaultClient()
 	if _, err := os.Stat(path); err == nil {
@@ -460,8 +547,9 @@ func LoadClient(path string) (ClientConfig, error) {
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return cfg, err
+	} else if explicit {
+		return cfg, fmt.Errorf("配置文件不存在: %s", path)
 	}
-	applyClientEnv(&cfg)
 	if cfg.Upload.WarnFiles < 0 {
 		return cfg, errors.New("upload.warn_files 不能为负")
 	}
@@ -475,8 +563,9 @@ func LoadClient(path string) (ClientConfig, error) {
 }
 
 func LoadAdmin(path string) (AdminConfig, error) {
+	explicit := path != ""
 	if path == "" {
-		path = envOr("FT_ADMIN_CONFIG", DefaultAdminConfig)
+		path = DefaultAdminConfig
 	}
 	cfg := DefaultAdmin()
 	if _, err := os.Stat(path); err == nil {
@@ -485,49 +574,18 @@ func LoadAdmin(path string) (AdminConfig, error) {
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return cfg, err
+	} else if explicit {
+		return cfg, fmt.Errorf("配置文件不存在: %s", path)
 	}
-	applyAdminEnv(&cfg)
 	return cfg, nil
 }
 
-func applyServerEnv(c *ServerConfig) {
-	setStr(&c.Server.Listen, "FT_LISTEN")
-	setStr(&c.Server.LogFile, "FT_LOG_FILE")
-	setStr(&c.S3.Endpoint, "FT_S3_ENDPOINT")
-	setStr(&c.S3.Bucket, "FT_BUCKET")
-	setStr(&c.Auth.TokenSecret, "FT_TOKEN_SECRET")
-	setStr(&c.Auth.UploadSecret, "FT_UPLOAD_SECRET")
-	setStr(&c.Auth.TokenTTL, "FT_TOKEN_TTL")
-	setStr(&c.Auth.MultipartTTL, "FT_MULTIPART_TTL")
-}
-
-func applyClientEnv(c *ClientConfig) {
-	setStr(&c.Server.URL, "FT_SERVER_URL")
-}
-
-func applyAdminEnv(c *AdminConfig) {
-	setTrimmed(&c.S3.AccessKey, "RUSTFS_ACCESS_KEY")
-	setTrimmed(&c.S3.SecretKey, "RUSTFS_SECRET_KEY")
-	setStr(&c.Server.URL, "FT_SERVER_URL")
-}
-
-func setStr(dst *string, env string) {
-	if v := os.Getenv(env); v != "" {
-		*dst = v
+func formatStringList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, item := range items {
+		quoted[i] = strconv.Quote(item)
 	}
-}
-
-func setTrimmed(dst *string, env string) {
-	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
-		*dst = v
-	}
-}
-
-func envOr(env, def string) string {
-	if v := os.Getenv(env); v != "" {
-		return v
-	}
-	return def
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // WriteServerConfig 写入带默认值的 ft-server.toml；已存在时不覆盖。
@@ -543,7 +601,7 @@ func SaveServerConfig(path string, cfg ServerConfig) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# ft-server.toml\n")
 	fmt.Fprintf(&b, "[server]\n  listen = %q\n  log_file = %q\n\n", cfg.Server.Listen, cfg.Server.LogFile)
-	fmt.Fprintf(&b, "[s3]\n  endpoint = %q\n  bucket = %q\n  region = %q\n  # 服务身份凭据见同目录 secrets/，不在本文件中配置\n\n", cfg.S3.Endpoint, cfg.S3.Bucket, cfg.S3.Region)
+	fmt.Fprintf(&b, "[s3]\n  endpoint = %q\n  home_bucket = %q\n  shared_bucket = %q\n  shared_dirs = %s\n  region = %q\n  # 服务身份凭据见同目录 secrets/，不在本文件中配置\n\n", cfg.S3.Endpoint, cfg.S3.HomeBucket, cfg.S3.SharedBucket, formatStringList(cfg.S3.SharedDirs), cfg.S3.Region)
 	fmt.Fprintf(&b, "[auth]\n  token_secret = %q\n  token_ttl = %q\n  upload_secret = %q\n  multipart_ttl = %q\n\n", cfg.Auth.TokenSecret, cfg.Auth.TokenTTL, cfg.Auth.UploadSecret, cfg.Auth.MultipartTTL)
 	fmt.Fprintf(&b, "[log]\n  max_age_days = %d\n  max_backups = %d\n  max_size_mb = %d\n  compress = %t\n\n", cfg.Log.MaxAgeDays, cfg.Log.MaxBackups, cfg.Log.MaxSizeMB, cfg.Log.Compress)
 	fmt.Fprintf(&b, "[retention]\n  inbound_days = %d\n  outbound_days = %d\n  upload_days = %d\n  incomplete_days = %d\n\n", cfg.Retention.InboundDays, cfg.Retention.OutboundDays, cfg.Retention.UploadDays, cfg.Retention.IncompleteDays)

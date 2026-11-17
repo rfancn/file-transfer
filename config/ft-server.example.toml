@@ -7,7 +7,9 @@
 
 [s3]
   endpoint = "http://127.0.0.1:9000"
-  bucket = "file-transfer"
+  home_bucket = "home"
+  shared_bucket = "shared"
+  shared_dirs = ["software", "document"]
   region = "us-east-1"
   # 服务身份凭据由 ft-admin init 写入当前工作目录 secrets/s3_credentials.json，不在本文件中配置
 

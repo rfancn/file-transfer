@@ -21,6 +21,10 @@ const (
 	AdminGroup = "ft-operator-group"
 	// AdminGroupPol 是工作网 Console 操作员的组策略。
 	AdminGroupPol = "ft-operator-policy"
+	// SharedAdminGroup 是共享桶操作员组。
+	SharedAdminGroup = "shared-operator-group"
+	// SharedAdminPol 是共享桶操作员的组策略。
+	SharedAdminPol = "shared-operator-policy"
 	// DataUser 是 ft-server 的数据面服务身份，用于代理文件列表、下载和上传。
 	DataUser = "ft-data"
 	// DataPolicy 是数据面服务身份的策略。
@@ -30,6 +34,30 @@ const (
 	// ServerAdminPol 是管理面服务身份的策略。
 	ServerAdminPol = "ft-admin-policy"
 )
+
+// groupSpec 描述一个可分配的用户组及其绑定的策略。
+type groupSpec struct {
+	policy string
+	doc    func(*Policies) []byte
+}
+
+// groupSpecs 是用户组到策略的统一映射，新增组时只改这里。
+var groupSpecs = map[string]groupSpec{
+	UserGroup:        {UserGroupPol, func(p *Policies) []byte { return p.Group }},
+	AdminGroup:       {AdminGroupPol, func(p *Policies) []byte { return p.Operator }},
+	SharedAdminGroup: {SharedAdminPol, func(p *Policies) []byte { return p.SharedOperator }},
+}
+
+// IsValidGroup 返回 name 是否为可分配的用户组。
+func IsValidGroup(name string) bool {
+	_, ok := groupSpecs[name]
+	return ok
+}
+
+// IsPrivilegedGroup 返回组是否需要二次确认才能创建。
+func IsPrivilegedGroup(name string) bool {
+	return name == AdminGroup || name == SharedAdminGroup
+}
 
 // systemUsers 是系统内置账号，不允许通过管理接口删除或重置密码。
 // 同时包含旧版本和离线安装脚本可能创建的服务账号。
@@ -290,7 +318,7 @@ func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (
 	if group == "" {
 		group = UserGroup
 	}
-	if group != UserGroup && group != AdminGroup {
+	if !IsValidGroup(group) {
 		return false, fmt.Errorf("不支持的组: %s", group)
 	}
 	exists, err := m.UserExists(ctx, user)
@@ -305,19 +333,21 @@ func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (
 	if err := m.AddToGroup(ctx, group, user); err != nil {
 		return !exists, err
 	}
-	if group == AdminGroup {
-		if err := m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, nil, []string{AdminGroup}); err != nil {
+	if err := m.applyGroupPolicy(ctx, group); err != nil {
+		return !exists, err
+	}
+	if group == UserGroup {
+		if err := m.CreatePlaceholders(ctx, user); err != nil {
 			return !exists, err
 		}
-		return !exists, nil
-	}
-	if err := m.ReplacePolicy(ctx, UserGroupPol, m.Policies.Group, nil, []string{UserGroup}); err != nil {
-		return !exists, err
-	}
-	if err := m.CreatePlaceholders(ctx, user); err != nil {
-		return !exists, err
 	}
 	return !exists, nil
+}
+
+// applyGroupPolicy 把组对应的策略绑定到该组。
+func (m *Manager) applyGroupPolicy(ctx context.Context, group string) error {
+	spec := groupSpecs[group]
+	return m.ReplacePolicy(ctx, spec.policy, spec.doc(m.Policies), nil, []string{group})
 }
 
 func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error) {
@@ -380,13 +410,23 @@ func (m *Manager) EnsureGroup(ctx context.Context, group string) error {
 
 // EnsureOperatorGroup 创建操作员组并绑定 operator 策略，不创建默认操作员用户。
 func (m *Manager) EnsureOperatorGroup(ctx context.Context) error {
+	return m.ensureGroupPolicy(ctx, AdminGroup)
+}
+
+// EnsureSharedOperatorGroup 创建共享操作员组并绑定共享桶策略。
+func (m *Manager) EnsureSharedOperatorGroup(ctx context.Context) error {
+	return m.ensureGroupPolicy(ctx, SharedAdminGroup)
+}
+
+// ensureGroupPolicy 保证组存在并绑定其策略。
+func (m *Manager) ensureGroupPolicy(ctx context.Context, group string) error {
 	if m.Policies == nil {
 		return errors.New("IAM 策略未加载")
 	}
-	if err := m.EnsureGroup(ctx, AdminGroup); err != nil {
+	if err := m.EnsureGroup(ctx, group); err != nil {
 		return err
 	}
-	return m.ReplacePolicy(ctx, AdminGroupPol, m.Policies.Operator, nil, []string{AdminGroup})
+	return m.applyGroupPolicy(ctx, group)
 }
 
 func (m *Manager) ListUsers(ctx context.Context) (map[string]madmin.UserInfo, error) {

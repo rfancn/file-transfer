@@ -63,7 +63,7 @@ func TestValidateUsername(t *testing.T) {
 			t.Fatalf("%s: %v", n, err)
 		}
 	}
-	for _, n := range []string{"", "a.b", "a b", "ft-admin", "ft-data", "ft-operator", "root", strings.Repeat("a", 65)} {
+	for _, n := range []string{"", "a.b", "a b", "ft-admin", "ft-data", "ft-operator", "shared-operator-group", "shared-operator-policy", "root", strings.Repeat("a", 65)} {
 		if err := ValidateUsername(n); err == nil {
 			t.Fatalf("%s should be invalid", n)
 		}
