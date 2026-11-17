@@ -36,7 +36,7 @@ func promptCredential(label string, secret bool) (value string, ok bool) {
 // login 在显示菜单或执行命令前校验管理员凭证。
 func login(cfg config.AdminConfig, user, pass string) *adminapi.Client {
 	fmt.Printf("ft-server: %s\n", cfg.Server.URL)
-	ac, err := adminapi.New(cfg.Server.URL)
+	ac, err := adminapi.New(cfg.Server)
 	if err != nil {
 		log.Fatalf("连接 ft-server 失败: %v", err)
 	}

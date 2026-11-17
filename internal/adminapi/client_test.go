@@ -3,9 +3,16 @@ package adminapi
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/rfancn/file-transfer/internal/config"
 )
 
 func TestLogin(t *testing.T) {
@@ -26,7 +33,7 @@ func TestLogin(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +65,7 @@ func TestInit(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +101,7 @@ func TestAddUser(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +126,7 @@ func TestResetPassword(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +158,7 @@ func TestListUsers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +186,7 @@ func TestClean(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +211,7 @@ func TestUnauthorizedError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c, err := New(ts.URL)
+	c, err := New(config.ClientSection{URL: ts.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,5 +219,45 @@ func TestUnauthorizedError(t *testing.T) {
 	ae, ok := AsAPIError(err)
 	if !ok || ae.Status != http.StatusUnauthorized || ae.Code != "invalid_credentials" {
 		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestNewTLS(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	defer srv.Close()
+
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		server  config.ClientSection
+		wantErr bool
+	}{
+		{"默认拒绝自签名证书", config.ClientSection{URL: srv.URL}, true},
+		{"ca_cert 信任服务端证书", config.ClientSection{URL: srv.URL, CACert: caPath}, false},
+		{"insecure_skip_verify 跳过校验", config.ClientSection{URL: srv.URL, InsecureSkipVerify: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := New(tt.server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := c.http.Get(srv.URL)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
 	}
 }
