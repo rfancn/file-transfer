@@ -866,7 +866,8 @@ func downloadTargets(cl *client.Client, dir, out string, targets []protocol.File
 		if err != nil {
 			continue
 		}
-		if st, err := os.Stat(target); err == nil && !st.IsDir() {
+		// 只把普通文件视为可覆盖的冲突；符号链接和目录交给 Download 拒绝。
+		if fi, err := os.Lstat(target); err == nil && fi.Mode().IsRegular() {
 			existing[i] = true
 			conflicts++
 		}
