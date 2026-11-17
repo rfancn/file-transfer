@@ -5,6 +5,14 @@
 [server]
   url = "http://ft-server:8080"
 
+  # 使用自签名或内部 CA 证书时，指定签发服务端证书的 CA（PEM 文件）。
+  # 使用公网 CA（如 Let's Encrypt）时留空，走系统根证书库。
+  # 注意：这里不是反向代理的服务端证书，而是签发它的 CA 证书。
+  # ca_cert = "/etc/file-transfer/ca.pem"
+
+  # 跳过证书校验，仅用于内网调试；存在中间人风险，不要与 ca_cert 同时设置。
+  # insecure_skip_verify = false
+
 # 上传前数据量提示阈值：文件数或总大小超过任意一项时给出醒目警告。
 # 设为 0 可关闭对应提示。
 [upload]
