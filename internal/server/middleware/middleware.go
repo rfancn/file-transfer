@@ -27,7 +27,7 @@ func RequestID() gin.HandlerFunc {
 func RequireReady(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !a.S3Ready() {
-			response.Err(c, http.StatusServiceUnavailable, "not_initialized", "系统尚未初始化，请先执行 ft-admin init")
+			response.Err(c, http.StatusServiceUnavailable, "not_initialized", "系统尚未初始化，请先初始化")
 			c.Abort()
 			return
 		}

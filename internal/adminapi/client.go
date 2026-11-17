@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/httpx"
 	"github.com/rfancn/file-transfer/internal/protocol"
 )
 
@@ -38,13 +40,18 @@ type Client struct {
 	http    *http.Client
 }
 
-func New(baseURL string) (*Client, error) {
-	if baseURL == "" {
+// New 根据服务端地址和 TLS 配置创建管理接口客户端。
+func New(server config.ClientSection) (*Client, error) {
+	if server.URL == "" {
 		return nil, fmt.Errorf("server.url 不能为空")
 	}
+	httpClient, err := httpx.NewClient(server)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{},
+		baseURL: strings.TrimRight(server.URL, "/"),
+		http:    httpClient,
 	}, nil
 }
 

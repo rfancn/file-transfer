@@ -28,7 +28,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	dataCreds, adminCreds, credErr := config.LoadServiceSecrets()
 	ready := credErr == nil
 	if !ready {
-		logging.Warn("系统尚未初始化，业务接口不可用，请执行 ft-admin init")
+		logging.Warn("系统尚未初始化，业务接口不可用，请先初始化")
 	}
 	data, err := s3.New(cfg.S3.Endpoint, dataCreds.AccessKey, dataCreds.SecretKey, cfg.S3.Region, cfg.S3.HomeBucket)
 	if err != nil {

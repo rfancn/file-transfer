@@ -163,7 +163,7 @@ ft-client download upload project-a/data.zip --output ./upload
 - 用户初始化、用户管理和过期数据清理；
 - 运行日志与操作审计。
 
-`ft-server` 未完成初始化时，业务接口返回 503，并提示先执行 `ft-admin init`。
+`ft-server` 未完成初始化时，业务接口返回 503，并提示先初始化。
 
 ### `ft-client`（用户端）
 
@@ -416,7 +416,7 @@ sudo ./script/install.sh http://ft-server:8080
 
 ### 配置与登录
 
-- 默认读取 `/etc/file-transfer/ft-client.toml`（与 `ft-client` 共用），只使用 `[server] url`。
+- 默认读取 `/etc/file-transfer/ft-client.toml`（与 `ft-client` 共用），使用 `[server]` 下的 `url`、`ca_cert` 和 `insecure_skip_verify`。
 - 配置文件可用 `--config` 指定；服务端地址在配置文件的 `[server] url` 中设置。
 - 管理员账号密码可用 `--admin-user` / `--admin-password` 或 `--admin-password-file` 提供，否则启动时交互输入。`--admin-password` 会出现在进程列表中，自动化场景建议使用 `--admin-password-file`。
 - 启动后先登录 `ft-server`，再显示菜单或执行子命令。
@@ -533,7 +533,7 @@ ADMIN_PASSWORD=...
 ## 安全边界
 
 - 客户端支持 `http://` 和 `https://` 服务端地址；跨不可信网络时应使用 HTTPS。
-- `ft-server` 位于反向代理（如 Traefik）之后且使用自签名或内部 CA 证书时，可在 `ft-client` 配置中设置 `server.ca_cert` 指向签发该证书的 CA PEM；临时调试可用 `server.insecure_skip_verify = true`，两者不能同时设置。
+- `ft-server` 位于反向代理（如 Traefik）之后且使用自签名或内部 CA 证书时，可在 `ft-client` / `ft-admin` 共用的配置中设置 `server.ca_cert` 指向签发该证书的 CA PEM；临时调试可用 `server.insecure_skip_verify = true`，两者不能同时设置。
 - `ft-server` 的管理端口不应暴露到不可信网络。
 - `ft-server` 不向客户端下发 S3 凭据；所有 RustFS 操作由服务身份代理。
 - `ft-client` 以明文保存账号密码（0600）；不需要自动登录时删除 `~/.file-transfer`。
