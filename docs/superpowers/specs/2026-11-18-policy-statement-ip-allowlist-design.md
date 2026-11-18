@@ -69,6 +69,7 @@ Content-Type: application/json
 | Sid 对应的语句不是 Allow | 400 | `statement_not_allow` |
 | 同一策略中 Sid 重复 | 500 | `invalid_policy` |
 | 策略目录不可写 | 500 | `policy_write_failed` |
+| 模板已写入但下发 RustFS 失败 | 502 | `apply_failed` |
 | RustFS 不可用 | 502 | `rustfs_unavailable` |
 
 所有管理接口沿用现有 `AdminAuth` + `RequireReady` 中间件。修改成功后写入审计日志，
@@ -155,14 +156,18 @@ Content-Type: application/json
   - `Manager` 增加 `PolicyDir string` 字段；
   - 新增 `SetStatementIPRanges(ctx, policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, error)`：
     1. 校验策略名并规范化 CIDR；
-    2. 加包级互斥锁，防止并发写模板；
-    3. 读取模板文件，调用 `SetStatementSourceIP`；
-    4. 用 `PolicyOptions` 渲染并校验 JSON；
-    5. 原子写回模板文件（同目录临时文件 + `rename`，权限 0644）；
-    6. 更新内存中的渲染结果（见 6.2）；
-    7. 找出绑定该策略的用户和组（`ListUsers` + `ListGroups`/`GetGroupDescription`），
-       并入固定的绑定组，调用现有 `ReplacePolicy` 立即下发到 RustFS；
-    8. 返回规范化后的 CIDR 列表。
+    2. 获取包级 `policyWriteMu`（与 `ReplacePolicy` 共享），串行化所有策略写操作；
+    3. 先找出绑定该策略的用户和组（`ListUsers` + `ListGroups`/`GetGroupDescription`），
+       支持逗号分隔的多策略字段；组描述读取失败直接返回错误，不静默跳过；
+    4. 读取模板文件，调用 `SetStatementSourceIP`；
+    5. 用 `PolicyOptions` 渲染并校验 JSON；
+    6. 原子写回模板文件（同目录临时文件 + `rename`，保留原权限）；
+    7. 更新内存中的渲染结果（见 6.2）；
+    8. 用脱离请求取消的 30 秒上下文调用内部 `replacePolicy` 立即下发；
+       失败返回 `ErrApplyFailed`，表示规则已持久化但未下发；
+    9. 返回规范化后的 CIDR 列表。
+  - `ReplacePolicy` 改为获取 `policyWriteMu` 后调用内部 `replacePolicy`，
+    保证用户注册、`ft-admin init` 与本接口不会并发交叉写同一策略。
   - 下发的策略内容取自已修改模板的渲染结果，因此会同时补上模板中的 Sid；旧的、无 Sid 的线上策略
     也会被新模板覆盖（与现有 `ft-admin init` 行为一致）。
   - `applyGroupPolicy` 改为从带锁的内存文档读取模板，而不是直接读 `m.Policies` 字段；
@@ -256,3 +261,5 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
   确认带 Sid 的策略可以正常加载和生效。
 - 直接修改模板会让工作区出现未提交改动；升级覆盖模板会丢失规则，已在文档中提示。
 - 替换策略时存在极短的解绑/重绑窗口，期间相关组可能短暂无权限；属管理操作可接受。
+- 模板写回后下发失败时，本地模板已是新规则而线上策略可能仍是旧规则；接口返回 `apply_failed`，
+  重试本接口或执行 `ft-admin init` 可重新下发并自愈。

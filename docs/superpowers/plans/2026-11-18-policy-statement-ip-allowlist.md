@@ -1661,6 +1661,8 @@ func writePolicyError(c *gin.Context, err error) {
 		response.Err(c, http.StatusInternalServerError, "invalid_policy", "策略内容无效")
 	case errors.Is(err, iam.ErrPolicyWrite):
 		response.Err(c, http.StatusInternalServerError, "policy_write_failed", "写入策略文件失败，请检查 policy 目录权限")
+	case errors.Is(err, iam.ErrApplyFailed):
+		response.Err(c, http.StatusBadGateway, "apply_failed", "规则已写入模板但下发 RustFS 失败，请重试或执行 ft-admin init")
 	default:
 		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "RustFS 管理服务不可用")
 	}
