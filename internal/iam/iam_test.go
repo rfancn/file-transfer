@@ -537,8 +537,14 @@ func TestPolicyTemplateSIDs(t *testing.T) {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			t.Fatalf("%s: %v", file, err)
 		}
+		if len(doc.Statement) != len(want) {
+			t.Fatalf("%s 语句数量 = %d，期望 %d", file, len(doc.Statement), len(want))
+		}
 		seen := map[string]bool{}
 		for i, st := range doc.Statement {
+			if doc.Statement[i].Sid != want[i] {
+				t.Fatalf("%s 第 %d 条语句 Sid = %s，期望 %s", file, i+1, doc.Statement[i].Sid, want[i])
+			}
 			if st.Sid == "" {
 				t.Fatalf("%s 第 %d 条语句缺少 Sid", file, i+1)
 			}
