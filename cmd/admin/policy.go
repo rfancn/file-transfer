@@ -92,7 +92,7 @@ func setPolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string, c
 			failf("请提供至少一个网段，或使用 --clear 清除")
 			return
 		}
-		value, err := cliui.Input("IP 网段（逗号分隔，留空表示清除）", "", nil)
+		value, err := cliui.Input("IP 或网段（逗号分隔，留空表示清除）", "", nil)
 		if canceledByUser(err) {
 			return
 		}
@@ -169,7 +169,7 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 		return
 	}
 	sid := sids[sidIdx]
-	value, err := cliui.Input("IP 网段（逗号分隔，留空表示清除）", "", nil)
+	value, err := cliui.Input("IP 或网段（逗号分隔，留空表示清除）", "", nil)
 	if canceledByUser(err) {
 		return
 	}

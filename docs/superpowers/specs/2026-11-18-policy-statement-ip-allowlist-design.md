@@ -43,13 +43,13 @@ Content-Type: application/json
 请求体：
 
 ```json
-{ "cidrs": ["10.0.0.0/8", "192.168.1.0/24"] }
+{ "cidrs": ["10.0.0.1", "192.168.1.0/24"] }
 ```
 
 - `cidrs` 字段必须显式提供；
 - `cidrs: []` 表示清除该语句的 IP 条件；
-- 每条网段使用 `net/netip.ParsePrefix` 校验并规范化为掩码形式（`10.0.0.1/8` → `10.0.0.0/8`），
-  自动去重，最多 100 条，支持 IPv4 和 IPv6；空字符串会被拒绝。
+- 每个值可以是单个 IP 或 CIDR 网段；单个 IPv4 规范化为 /32，IPv6 规范化为 /128，
+  网段清零主机位（`10.0.0.1/8` → `10.0.0.0/8`），自动去重，最多 100 条；空字符串会被拒绝。
 
 ### 3.2 响应
 
@@ -62,7 +62,7 @@ Content-Type: application/json
 | 场景 | HTTP | code |
 |---|---|---|
 | 请求体非法、`cidrs` 缺失 | 400 | `invalid_request` |
-| CIDR 格式非法 | 400 | `invalid_cidr` |
+| IP/CIDR 格式非法 | 400 | `invalid_cidr` |
 | 策略不在允许范围 | 400 | `unsupported_policy` |
 | 目标是 `ft-data-policy` / `ft-admin-policy` | 403 | `service_policy` |
 | 策略中不存在该 Sid | 400 | `sid_not_found` |
@@ -253,7 +253,7 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
 
 - `internal/iam`：
   - `SetStatementSourceIP` 表驱动测试：新增、替换、清除、保留其他条件、Deny 拒绝、Sid 不存在、Sid 重复、非法 JSON；
-  - `NormalizeCIDRs`：IPv4/IPv6、非法值、去重、空列表；
+  - `NormalizeCIDRs`：单 IP 与网段、IPv4/IPv6、非法值、去重、空列表；
   - 三个模板的 Sid 唯一性及关键 Sid 存在性。
 - `internal/server/handler`：缺字段、非法 CIDR、非法策略、服务策略拒绝。
 - `internal/server/router`：新路由未认证返回 401。

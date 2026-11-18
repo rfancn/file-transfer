@@ -305,7 +305,7 @@ Content-Type: application/json
 { "cidrs": ["10.0.0.0/8", "192.168.1.0/24"] }
 ```
 
-`cidrs` 必须显式提供，缺失返回 `invalid_request`；支持 IPv4/IPv6，最多 100 条，服务端会自动去重并规范化为掩码形式；只支持 `Allow` 语句。
+`cidrs` 必须显式提供，缺失返回 `invalid_request`；支持单个 IPv4/IPv6 地址或 CIDR 网段（例如 `10.0.0.1`、`10.0.0.0/8`、`2001:db8::1`），单 IP 规范化为 /32（IPv4）或 /128（IPv6），最多 100 条，服务端会自动去重；只支持 `Allow` 语句。
 
 成功响应：
 
@@ -331,7 +331,7 @@ Authorization: Bearer <admin token>
 | HTTP | code | 说明 |
 |---|---|---|
 | 400 | `invalid_request` | 请求体非法或缺少 `cidrs` |
-| 400 | `invalid_cidr` | 网段格式非法 |
+| 400 | `invalid_cidr` | IP/网段格式非法 |
 | 400 | `unsupported_policy` | 策略不在允许范围 |
 | 403 | `service_policy` | 不允许修改服务身份策略 |
 | 400 | `sid_not_found` | 策略中不存在该 Sid（模板可能缺少 Sid，需先合并新模板） |
@@ -359,7 +359,8 @@ Authorization: Bearer <admin token>
 命令：
 
 ```sh
-ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 192.168.1.0/24
+ft-admin policy ip ft-user-policy UploadWrite 10.0.0.1 192.168.1.0/24
+ft-admin policy ip ft-user-policy UploadWrite 10.0.0.1,192.168.1.0/24
 ft-admin policy ip ft-user-policy UploadWrite --clear
 ```
 

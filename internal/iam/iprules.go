@@ -21,7 +21,7 @@ var (
 	ErrServicePolicy     = errors.New("服务身份策略不允许修改")
 	ErrSIDNotFound       = errors.New("策略中不存在指定 Sid")
 	ErrStatementNotAllow = errors.New("指定 Sid 不是 Allow 语句")
-	ErrInvalidCIDR       = errors.New("无效的 IP 网段")
+	ErrInvalidCIDR       = errors.New("无效的 IP 或网段")
 	ErrInvalidPolicy     = errors.New("策略内容无效")
 	ErrPolicyRead        = errors.New("读取策略文件失败")
 	ErrPolicyWrite       = errors.New("写入策略文件失败")
@@ -93,7 +93,8 @@ func (m *Manager) PolicySids(policyName string) ([]string, error) {
 	return sids, nil
 }
 
-// NormalizeCIDRs 校验并规范化网段列表，去掉重复项。
+// NormalizeCIDRs 校验并规范化 IP/网段列表，去掉重复项。
+// 单个 IP 会规范化为 /32（IPv4）或 /128（IPv6），网段会清零主机位。
 func NormalizeCIDRs(cidrs []string) ([]string, error) {
 	if len(cidrs) > maxCIDRs {
 		return nil, fmt.Errorf("%w: 最多 %d 条", ErrInvalidCIDR, maxCIDRs)
@@ -105,11 +106,10 @@ func NormalizeCIDRs(cidrs []string) ([]string, error) {
 		if value == "" {
 			return nil, fmt.Errorf("%w: 不能为空", ErrInvalidCIDR)
 		}
-		prefix, err := netip.ParsePrefix(value)
+		normalized, err := normalizeSourceIP(value)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %q", ErrInvalidCIDR, value)
 		}
-		normalized := prefix.Masked().String()
 		if _, ok := seen[normalized]; ok {
 			continue
 		}
@@ -117,6 +117,25 @@ func NormalizeCIDRs(cidrs []string) ([]string, error) {
 		out = append(out, normalized)
 	}
 	return out, nil
+}
+
+// normalizeSourceIP 接受单个 IP 或 CIDR 网段，返回规范化后的 CIDR。
+func normalizeSourceIP(value string) (string, error) {
+	if strings.Contains(value, "/") {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return "", err
+		}
+		return prefix.Masked().String(), nil
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return "", err
+	}
+	if addr.Zone() != "" {
+		return "", errors.New("不支持 IPv6 zone")
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()).String(), nil
 }
 
 // SetStatementSourceIP 为指定 Sid 的 Allow 语句设置或清除 aws:SourceIp 条件。
