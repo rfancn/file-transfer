@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rfancn/file-transfer/internal/config"
@@ -208,6 +209,9 @@ func TestSetStatementIPRanges(t *testing.T) {
 	var gotAuth, gotMethod, gotPath string
 	var gotCidrs []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q", got)
+		}
 		gotAuth = r.Header.Get("Authorization")
 		gotMethod = r.Method
 		gotPath = r.URL.Path
@@ -270,6 +274,51 @@ func TestSetStatementIPRangesClearSendsEmptyArray(t *testing.T) {
 	}
 	if gotBody != `{"cidrs":[]}` {
 		t.Fatalf("body = %s", gotBody)
+	}
+}
+
+func TestSetStatementIPRangesEscapesPath(t *testing.T) {
+	var gotURI string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.SetStatementIPRanges(context.Background(), "ft user policy", "Upload Write", []string{"10.0.0.0/8"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotURI, "/v1/admin/policies/ft%20user%20policy/statements/Upload%20Write/ip-ranges") {
+		t.Fatalf("URI = %q", gotURI)
+	}
+}
+
+func TestSetStatementIPRangesError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_cidr", "message": "无效的 IP 网段"})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	res, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"bad"})
+	ae, ok := AsAPIError(err)
+	if !ok || ae.Status != http.StatusBadRequest || ae.Code != "invalid_cidr" {
+		t.Fatalf("err = %#v", err)
+	}
+	if res.Policy != "" || res.Sid != "" || res.Cidrs != nil {
+		t.Fatalf("res = %+v", res)
 	}
 }
 
