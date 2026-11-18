@@ -305,6 +305,8 @@ func writePolicyError(c *gin.Context, err error) {
 		response.Err(c, http.StatusBadRequest, "statement_not_allow", "只能给 Allow 语句设置 IP 白名单")
 	case errors.Is(err, iam.ErrInvalidPolicy):
 		response.Err(c, http.StatusInternalServerError, "invalid_policy", "策略内容无效")
+	case errors.Is(err, iam.ErrPolicyRead):
+		response.Err(c, http.StatusInternalServerError, "policy_read_failed", "读取策略文件失败，请检查 policy 目录和配置")
 	case errors.Is(err, iam.ErrPolicyWrite):
 		response.Err(c, http.StatusInternalServerError, "policy_write_failed", "写入策略文件失败，请检查 policy 目录权限")
 	case errors.Is(err, iam.ErrApplyFailed):

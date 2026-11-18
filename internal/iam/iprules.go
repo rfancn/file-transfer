@@ -23,6 +23,7 @@ var (
 	ErrStatementNotAllow = errors.New("指定 Sid 不是 Allow 语句")
 	ErrInvalidCIDR       = errors.New("无效的 IP 网段")
 	ErrInvalidPolicy     = errors.New("策略内容无效")
+	ErrPolicyRead        = errors.New("读取策略文件失败")
 	ErrPolicyWrite       = errors.New("写入策略文件失败")
 	ErrApplyFailed       = errors.New("策略已持久化但下发 RustFS 失败")
 )
@@ -185,15 +186,15 @@ func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, op
 		return nil, nil, err
 	}
 	if m.PolicyDir == "" {
-		return nil, nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyWrite)
+		return nil, nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyRead)
 	}
 	if m.Policies == nil {
-		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyWrite)
+		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyRead)
 	}
 	path := filepath.Join(m.PolicyDir, spec.file)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %w", ErrPolicyWrite, path, err)
+		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %w", ErrPolicyRead, path, err)
 	}
 	updated, err := SetStatementSourceIP(raw, sid, normalized)
 	if err != nil {

@@ -346,6 +346,7 @@ Content-Type: application/json
 | 400 | `sid_not_found` | 策略中不存在该 Sid（模板可能缺少 Sid，需先合并新模板） |
 | 400 | `statement_not_allow` | 目标语句不是 Allow |
 | 500 | `invalid_policy` | 策略内容无效 |
+| 500 | `policy_read_failed` | 读取策略文件失败，请检查 policy 目录和配置 |
 | 500 | `policy_write_failed` | 策略目录不可写 |
 | 502 | `apply_failed` | 模板已写入但下发失败 |
 | 502 | `rustfs_unavailable` | RustFS 管理服务不可用 |

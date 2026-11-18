@@ -151,6 +151,20 @@ func (m *Manager) ReplacePolicy(ctx context.Context, name string, policy []byte,
 	return m.replacePolicy(ctx, name, policy, users, groups)
 }
 
+// ReplacePolicyFromDocument 在写入锁内读取最新内存文档并下发。
+func (m *Manager) ReplacePolicyFromDocument(ctx context.Context, name string, users, groups []string) error {
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
+	if m.Policies == nil {
+		return errors.New("IAM 策略未加载")
+	}
+	doc, err := m.Policies.Document(name)
+	if err != nil {
+		return err
+	}
+	return m.replacePolicy(ctx, name, doc, users, groups)
+}
+
 func (m *Manager) replacePolicy(ctx context.Context, name string, policy []byte, users, groups []string) error {
 	existing, err := m.Admin.InfoCannedPolicy(ctx, name)
 	if err != nil {
@@ -356,11 +370,7 @@ func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (
 // applyGroupPolicy 把组对应的策略绑定到该组。
 func (m *Manager) applyGroupPolicy(ctx context.Context, group string) error {
 	spec := groupSpecs[group]
-	doc, err := m.Policies.Document(spec.policy)
-	if err != nil {
-		return err
-	}
-	return m.ReplacePolicy(ctx, spec.policy, doc, nil, []string{group})
+	return m.ReplacePolicyFromDocument(ctx, spec.policy, nil, []string{group})
 }
 
 func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error) {
