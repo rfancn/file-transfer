@@ -3,6 +3,8 @@ package iam
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -184,6 +186,21 @@ func TestSetStatementSourceIPAddsAndPreserves(t *testing.T) {
 	if st["Protect"].Condition != nil {
 		t.Fatal("Deny 语句不应被修改")
 	}
+
+	before := parseStatements(t, []byte(testPolicy))
+	after := parseStatements(t, updated)
+	if !reflect.DeepEqual(before["SharedRead"], after["SharedRead"]) {
+		t.Fatalf("非目标语句 SharedRead 被修改: %#v", after["SharedRead"])
+	}
+	if !reflect.DeepEqual(before["Protect"], after["Protect"]) {
+		t.Fatalf("Deny 语句 Protect 被修改: %#v", after["Protect"])
+	}
+	if !strings.HasSuffix(string(updated), "\n") {
+		t.Fatal("输出缺少结尾换行")
+	}
+	if !strings.Contains(string(updated), "\n  \"Statement\"") {
+		t.Fatal("输出不是两空格缩进")
+	}
 }
 
 func TestSetStatementSourceIPKeepsOtherIPAddressKeys(t *testing.T) {
@@ -265,6 +282,13 @@ func TestSetStatementSourceIPErrors(t *testing.T) {
 		{"malformed json", `{"Version":`, "UploadWrite", ErrInvalidPolicy},
 		{"statement not array", `{"Version":"2012-10-17","Statement":{}}`, "UploadWrite", ErrInvalidPolicy},
 		{"duplicate sid", `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Allow"},{"Sid":"X","Effect":"Allow"}]}`, "X", ErrInvalidPolicy},
+		{"empty sid", testPolicy, "", ErrSIDNotFound},
+		{"non-string sid", `{"Version":"2012-10-17","Statement":[{"Sid":123,"Effect":"Allow"}]}`, "123", ErrInvalidPolicy},
+		{"statement item not object", `{"Version":"2012-10-17","Statement":["x"]}`, "X", ErrInvalidPolicy},
+		{"condition not object", `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Allow","Condition":"x"}]}`, "X", ErrInvalidPolicy},
+		{"ipaddress not object", `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Allow","Condition":{"IpAddress":"x"}}]}`, "X", ErrInvalidPolicy},
+		{"duplicate allow then deny", `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Allow"},{"Sid":"X","Effect":"Deny"}]}`, "X", ErrInvalidPolicy},
+		{"duplicate deny then allow", `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Deny"},{"Sid":"X","Effect":"Allow"}]}`, "X", ErrInvalidPolicy},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -273,5 +297,17 @@ func TestSetStatementSourceIPErrors(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestSetStatementSourceIPNullCondition(t *testing.T) {
+	policy := `{"Version":"2012-10-17","Statement":[{"Sid":"X","Effect":"Allow","Condition":null}]}`
+	updated, err := SetStatementSourceIP([]byte(policy), "X", []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sourceIPs(t, parseStatements(t, updated)["X"])
+	if len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Fatalf("aws:SourceIp = %v", got)
 	}
 }

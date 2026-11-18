@@ -73,8 +73,12 @@ func NormalizeCIDRs(cidrs []string) ([]string, error) {
 }
 
 // SetStatementSourceIP 为指定 Sid 的 Allow 语句设置或清除 aws:SourceIp 条件。
-// cidrs 为空时清除条件。
+// cidrs 必须已经过 NormalizeCIDRs 规范化；为空时清除条件。
+// 写回会重新序列化整篇策略（键按字母排序、两空格缩进）。
 func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, error) {
+	if sid == "" {
+		return nil, ErrSIDNotFound
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(policy, &doc); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
@@ -83,30 +87,39 @@ func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, er
 	if !ok {
 		return nil, fmt.Errorf("%w: Statement 必须是数组", ErrInvalidPolicy)
 	}
-	matches := 0
-	for _, raw := range rawStatements {
+
+	// 第一遍：定位并校验唯一匹配，避免先改写再报错。
+	var target map[string]any
+	for i, raw := range rawStatements {
 		statement, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%w: Statement 项必须是对象", ErrInvalidPolicy)
+			return nil, fmt.Errorf("%w: 第 %d 条 Statement 不是对象", ErrInvalidPolicy, i+1)
 		}
-		statementSID, _ := statement["Sid"].(string)
+		rawSID, exists := statement["Sid"]
+		if !exists {
+			continue
+		}
+		statementSID, ok := rawSID.(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: 第 %d 条 Statement 的 Sid 不是字符串", ErrInvalidPolicy, i+1)
+		}
 		if statementSID != sid {
 			continue
 		}
-		matches++
-		effect, _ := statement["Effect"].(string)
-		if !strings.EqualFold(effect, "Allow") {
-			return nil, ErrStatementNotAllow
+		if target != nil {
+			return nil, fmt.Errorf("%w: 重复 Sid %q", ErrInvalidPolicy, sid)
 		}
-		if err := setSourceIPCondition(statement, cidrs); err != nil {
-			return nil, err
-		}
+		target = statement
 	}
-	if matches == 0 {
-		return nil, ErrSIDNotFound
+	if target == nil {
+		return nil, fmt.Errorf("%w: %q", ErrSIDNotFound, sid)
 	}
-	if matches > 1 {
-		return nil, fmt.Errorf("%w: 重复 Sid %q", ErrInvalidPolicy, sid)
+	effect, _ := target["Effect"].(string)
+	if effect != "Allow" {
+		return nil, fmt.Errorf("%w: %q", ErrStatementNotAllow, sid)
+	}
+	if err := setSourceIPCondition(target, cidrs); err != nil {
+		return nil, err
 	}
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -117,14 +130,14 @@ func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, er
 
 func setSourceIPCondition(statement map[string]any, cidrs []string) error {
 	condition := map[string]any{}
-	if raw, ok := statement["Condition"]; ok {
+	if raw, ok := statement["Condition"]; ok && raw != nil {
 		condition, ok = raw.(map[string]any)
 		if !ok {
 			return fmt.Errorf("%w: Condition 必须是对象", ErrInvalidPolicy)
 		}
 	}
 	ipAddress := map[string]any{}
-	if raw, ok := condition["IpAddress"]; ok {
+	if raw, ok := condition["IpAddress"]; ok && raw != nil {
 		ipAddress, ok = raw.(map[string]any)
 		if !ok {
 			return fmt.Errorf("%w: IpAddress 必须是对象", ErrInvalidPolicy)
