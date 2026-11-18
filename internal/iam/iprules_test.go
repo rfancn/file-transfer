@@ -486,3 +486,30 @@ func TestCollectPolicyAttachments(t *testing.T) {
 		t.Fatal("期望组描述读取失败时返回错误")
 	}
 }
+
+func TestSetStatementIPRangesValidatesCIDRBeforeAttachments(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{PolicyDir: dir, Policies: policies} // Admin 为 nil，模拟 RustFS 不可用
+	path := filepath.Join(dir, policyUserGroupFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"bad"}, opts)
+	if !errors.Is(err, ErrInvalidCIDR) {
+		t.Fatalf("err = %v, want ErrInvalidCIDR", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("非法 CIDR 不应修改模板")
+	}
+}

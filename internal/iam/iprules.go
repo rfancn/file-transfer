@@ -145,25 +145,31 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	if !ok {
 		return nil, ErrUnsupportedPolicy
 	}
+	normalized, err := NormalizeCIDRs(cidrs)
+	if err != nil {
+		return nil, err
+	}
 	policyWriteMu.Lock()
 	defer policyWriteMu.Unlock()
 
 	// 先发现绑定关系，RustFS 列举失败时不修改本地模板。
-	users, groups, err := m.policyAttachments(ctx, policyName, spec.group)
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	users, groups, err := m.policyAttachments(listCtx, policyName, spec.group)
 	if err != nil {
 		return nil, err
 	}
 
-	normalized, rendered, err := m.renderUpdatedPolicy(policyName, sid, cidrs, opts)
+	_, rendered, err := m.renderUpdatedPolicy(policyName, sid, normalized, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	// 文件已落盘，后续下发不应因客户端断开而中途取消。
-	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
+	applyCtx, applyCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer applyCancel()
 	if err := m.replacePolicy(applyCtx, policyName, rendered, users, groups); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrApplyFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrApplyFailed, err)
 	}
 	return normalized, nil
 }
@@ -181,10 +187,13 @@ func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, op
 	if m.PolicyDir == "" {
 		return nil, nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyWrite)
 	}
+	if m.Policies == nil {
+		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyWrite)
+	}
 	path := filepath.Join(m.PolicyDir, spec.file)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %v", ErrPolicyWrite, path, err)
+		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %w", ErrPolicyWrite, path, err)
 	}
 	updated, err := SetStatementSourceIP(raw, sid, normalized)
 	if err != nil {
@@ -199,9 +208,6 @@ func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, op
 	}
 	if err := writeFileAtomic(path, updated); err != nil {
 		return nil, nil, fmt.Errorf("%w: %s: %v", ErrPolicyWrite, path, err)
-	}
-	if m.Policies == nil {
-		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyWrite)
 	}
 	if err := m.Policies.SetDocument(policyName, rendered); err != nil {
 		return nil, nil, err
