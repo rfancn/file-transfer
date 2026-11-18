@@ -11,7 +11,7 @@ import (
 const maxCIDRs = 100
 
 var (
-	ErrUnsupportedPolicy = errors.New("策略不支持 IP 白名单设置")
+	ErrUnsupportedPolicy = errors.New("策略不支持此操作")
 	ErrServicePolicy     = errors.New("服务身份策略不允许修改")
 	ErrSIDNotFound       = errors.New("策略中不存在指定 Sid")
 	ErrStatementNotAllow = errors.New("指定 Sid 不是 Allow 语句")

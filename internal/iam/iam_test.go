@@ -506,34 +506,58 @@ func TestIsSystemUser(t *testing.T) {
 }
 
 func TestPoliciesDocument(t *testing.T) {
+	tests := []struct {
+		name string
+		get  func(*Policies) []byte
+	}{
+		{UserGroupPol, func(p *Policies) []byte { return p.Group }},
+		{AdminGroupPol, func(p *Policies) []byte { return p.Operator }},
+		{SharedAdminPol, func(p *Policies) []byte { return p.SharedOperator }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := loadTestPolicies(t)
+			original, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(original) != string(tt.get(p)) {
+				t.Fatalf("%s Document 返回值与字段不一致", tt.name)
+			}
+
+			updated := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
+			expected := append([]byte(nil), updated...)
+			if err := p.SetDocument(tt.name, updated); err != nil {
+				t.Fatal(err)
+			}
+
+			// 写侧拷贝：修改入参不应影响已存储内容。
+			updated[0] = 'y'
+			stored, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(stored) != string(expected) {
+				t.Fatalf("%s SetDocument 别名了入参: %s", tt.name, stored)
+			}
+
+			// 读侧拷贝：修改返回切片不应影响已存储内容。
+			stored[0] = 'x'
+			again, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(again) != string(expected) {
+				t.Fatalf("%s Document 返回了内部切片: %s", tt.name, again)
+			}
+		})
+	}
+
 	p := loadTestPolicies(t)
-	doc, err := p.Document(UserGroupPol)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(doc) != string(p.Group) {
-		t.Fatal("Document 返回值与 Group 不一致")
-	}
-	updated := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
-	if err := p.SetDocument(UserGroupPol, updated); err != nil {
-		t.Fatal(err)
-	}
-	doc, err = p.Document(UserGroupPol)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(doc) != string(updated) {
-		t.Fatalf("Document = %s", doc)
-	}
-	doc[0] = 'x'
-	again, _ := p.Document(UserGroupPol)
-	if again[0] == 'x' {
-		t.Fatal("Document 返回了内部切片")
-	}
 	if _, err := p.Document(DataPolicy); !errors.Is(err, ErrUnsupportedPolicy) {
 		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
 	}
-	if err := p.SetDocument(ServerAdminPol, updated); !errors.Is(err, ErrUnsupportedPolicy) {
+	if err := p.SetDocument(ServerAdminPol, []byte(`{}`)); !errors.Is(err, ErrUnsupportedPolicy) {
 		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
 	}
 }

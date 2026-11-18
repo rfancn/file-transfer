@@ -27,6 +27,8 @@ type PolicyOptions struct {
 }
 
 // Policies 保存从 policy 目录加载的 IAM 策略。
+// mu 保护 Group/Operator/SharedOperator 的运行时读写；Data/Admin 在 LoadPolicies 后只读。
+// 调用方应通过 Document/SetDocument 访问三个组策略，不要直接写这些字段。
 type Policies struct {
 	mu             sync.RWMutex
 	Group          []byte
@@ -53,6 +55,7 @@ func (p *Policies) Document(name string) ([]byte, error) {
 }
 
 // SetDocument 更新指定组策略的渲染文档。
+// 调用方需保证 doc 已渲染且 JSON 有效。
 func (p *Policies) SetDocument(name string, doc []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -155,8 +158,8 @@ func renderPolicy(path string, raw []byte, opts PolicyOptions) ([]byte, error) {
 }
 
 // RenderPolicy 渲染策略模板，供运行时修改策略后重新生成内存文档。
-func RenderPolicy(name string, raw []byte, opts PolicyOptions) ([]byte, error) {
-	return renderPolicy(name, raw, opts)
+func RenderPolicy(path string, raw []byte, opts PolicyOptions) ([]byte, error) {
+	return renderPolicy(path, raw, opts)
 }
 
 func validatePolicyJSON(raw []byte) error {
