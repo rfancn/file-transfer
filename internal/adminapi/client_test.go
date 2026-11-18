@@ -236,7 +236,7 @@ func TestSetStatementIPRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.token = "admin-token"
-	res, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"})
+	res, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestSetStatementIPRangesClearSendsEmptyArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.token = "admin-token"
-	if _, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", nil); err != nil {
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotBody != `{"cidrs":[]}` {
@@ -291,7 +291,7 @@ func TestSetStatementIPRangesEscapesPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.token = "admin-token"
-	if _, err := c.SetStatementIPRanges(context.Background(), "ft user policy", "Upload Write", []string{"10.0.0.0/8"}); err != nil {
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft user policy", "Upload Write", []string{"10.0.0.0/8"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(gotURI, "/v1/admin/policies/ft%20user%20policy/statements/Upload%20Write/ip-ranges") {
@@ -312,7 +312,7 @@ func TestSetStatementIPRangesError(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.token = "admin-token"
-	res, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"bad"})
+	res, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"bad"}, "")
 	ae, ok := AsAPIError(err)
 	if !ok || ae.Status != http.StatusBadRequest || ae.Code != "invalid_cidr" {
 		t.Fatalf("err = %#v", err)

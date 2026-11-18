@@ -107,7 +107,12 @@ func (m *Manager) PolicySids(policyName string) ([]string, error) {
 // NormalizeCIDRs 校验并规范化 IP/网段列表，去掉重复项。
 // 单个 IP 会规范化为 /32（IPv4）或 /128（IPv6），网段会清零主机位。
 func NormalizeCIDRs(cidrs []string) ([]string, error) {
-	if len(cidrs) > maxCIDRs {
+	return normalizeIPs(cidrs, true)
+}
+
+// normalizeIPs 规范化 IP/网段；limit 为 true 时限制最多 maxCIDRs 条。
+func normalizeIPs(cidrs []string, limit bool) ([]string, error) {
+	if limit && len(cidrs) > maxCIDRs {
 		return nil, fmt.Errorf("%w: 最多 %d 条", ErrInvalidCIDR, maxCIDRs)
 	}
 	out := make([]string, 0, len(cidrs))
@@ -232,19 +237,23 @@ func (m *Manager) StatementIPRanges(policyName, sid string) ([]string, error) {
 	if !ok || rawIPs == nil {
 		return []string{}, nil
 	}
-	values, ok := rawIPs.([]any)
-	if !ok {
-		return nil, fmt.Errorf("%w: aws:SourceIp 必须是数组", ErrInvalidPolicy)
-	}
-	out := make([]string, 0, len(values))
-	for _, v := range values {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("%w: aws:SourceIp 值必须是字符串", ErrInvalidPolicy)
+	var out []string
+	switch values := rawIPs.(type) {
+	case []any:
+		out = make([]string, 0, len(values))
+		for _, v := range values {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("%w: aws:SourceIp 值必须是字符串", ErrInvalidPolicy)
+			}
+			out = append(out, s)
 		}
-		out = append(out, s)
+	case string:
+		out = []string{values}
+	default:
+		return nil, fmt.Errorf("%w: aws:SourceIp 必须是字符串或数组", ErrInvalidPolicy)
 	}
-	return NormalizeCIDRs(out)
+	return normalizeIPs(out, false)
 }
 
 // applyIPRangeMode 根据 set/add/remove 计算最终列表。
@@ -265,6 +274,9 @@ func applyIPRangeMode(current, changes []string, mode string) ([]string, error) 
 			}
 			seen[v] = struct{}{}
 			out = append(out, v)
+		}
+		if len(out) > maxCIDRs {
+			return nil, fmt.Errorf("%w: 最多 %d 条", ErrInvalidCIDR, maxCIDRs)
 		}
 		return out, nil
 	case IPRangeRemove:

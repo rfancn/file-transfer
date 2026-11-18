@@ -216,11 +216,6 @@ func (c *Client) ListPolicySids(ctx context.Context, policyName string) ([]strin
 	return out.Sids, nil
 }
 
-// SetStatementIPRanges 覆盖设置指定策略语句的 IP 白名单。
-func (c *Client) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string) (protocol.SetStatementIPRangesResponse, error) {
-	return c.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, "")
-}
-
 // ChangeStatementIPRanges 按 set/add/remove 模式修改指定策略语句的 IP 白名单。
 func (c *Client) ChangeStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string) (protocol.SetStatementIPRangesResponse, error) {
 	var out protocol.SetStatementIPRangesResponse

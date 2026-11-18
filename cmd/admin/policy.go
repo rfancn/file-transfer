@@ -113,20 +113,21 @@ func setPolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string, c
 		fmt.Sprintf("将策略 %s 语句 %s 的 IP 白名单设置为：%s", policyName, sid, strings.Join(cidrs, ", ")), yes)
 }
 
-// applyPolicyIPChange 确认并执行一次 IP 白名单修改。
-func applyPolicyIPChange(ac *adminapi.Client, policyName, sid string, cidrs []string, mode, message string, yes bool) {
+// applyPolicyIPChange 确认并执行一次 IP 白名单修改，返回是否成功。
+func applyPolicyIPChange(ac *adminapi.Client, policyName, sid string, cidrs []string, mode, message string, yes bool) bool {
 	fmt.Println(message)
 	if !yes && !confirm("确认修改") {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, mode)
 	if err != nil {
 		failf("修改 IP 白名单失败: %v", err)
-		return
+		return false
 	}
 	printPolicyIPs(res)
+	return true
 }
 
 func runPolicyIPMenu(ac *adminapi.Client) {
@@ -259,11 +260,13 @@ func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
 				fmt.Println("未选择任何 IP 或网段")
 				continue
 			}
-			removePolicyIPs(ac, policyName, sid, selected)
-			checked = map[string]bool{}
+			if removePolicyIPs(ac, policyName, sid, selected) {
+				checked = map[string]bool{}
+			}
 		case ipActionAdd:
-			addPolicyIPsMenu(ac, policyName, sid)
-			checked = map[string]bool{}
+			if addPolicyIPsMenu(ac, policyName, sid) {
+				checked = map[string]bool{}
+			}
 		case ipActionReturn:
 			return
 		}
@@ -341,21 +344,21 @@ func removePolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
 }
 
 // removePolicyIPs 确认并批量移除指定的 IP 或网段。
-func removePolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string) {
-	applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeRemove,
+func removePolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string) bool {
+	return applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeRemove,
 		fmt.Sprintf("将从策略 %s 语句 %s 移除：%s", policyName, sid, strings.Join(cidrs, ", ")), false)
 }
 
-func addPolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
+func addPolicyIPsMenu(ac *adminapi.Client, policyName, sid string) bool {
 	cidrs, ok := promptIPs()
 	if !ok {
-		return
+		return false
 	}
 	if err := validatePolicyIPArgs(policyName, sid, cidrs, false); err != nil {
 		failf("%v", err)
-		return
+		return false
 	}
-	applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeAdd,
+	return applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeAdd,
 		fmt.Sprintf("将向策略 %s 语句 %s 添加：%s", policyName, sid, strings.Join(cidrs, ", ")), false)
 }
 

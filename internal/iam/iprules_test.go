@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -570,6 +571,32 @@ func TestStatementIPRanges(t *testing.T) {
 	}
 	if _, err := m.StatementIPRanges(DataPolicy, "UploadWrite"); !errors.Is(err, ErrServicePolicy) {
 		t.Fatalf("service err = %v", err)
+	}
+}
+
+func TestStatementIPRangesStringCondition(t *testing.T) {
+	doc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Condition":{"IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`)
+	m := &Manager{Policies: &Policies{Group: doc}}
+	got, err := m.StatementIPRanges(UserGroupPol, "UploadWrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Fatalf("got = %v", got)
+	}
+}
+
+func TestApplyIPRangeModeRejectsOverLimit(t *testing.T) {
+	current := make([]string, 60)
+	for i := range current {
+		current[i] = fmt.Sprintf("10.%d.0.0/16", i)
+	}
+	changes := make([]string, 50)
+	for i := range changes {
+		changes[i] = fmt.Sprintf("172.%d.0.0/16", i)
+	}
+	if _, err := applyIPRangeMode(current, changes, IPRangeAdd); !errors.Is(err, ErrInvalidCIDR) {
+		t.Fatalf("err = %v, want ErrInvalidCIDR", err)
 	}
 }
 

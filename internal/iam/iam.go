@@ -36,7 +36,6 @@ const (
 	ServerAdminPol = "ft-admin-policy"
 )
 
-// groupSpec 描述一个可分配的用户组及其绑定的策略。
 // IsValidGroup 返回 name 是否为可分配的用户组。
 func IsValidGroup(name string) bool {
 	_, ok := policyDefForGroup(name)
