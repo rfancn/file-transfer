@@ -114,10 +114,11 @@ func Input(label, defaultVal string, validate ValidateFunc) (string, error) {
 		}
 	}
 	p := promptui.Prompt{
-		Label:    label,
-		Default:  defaultVal,
-		Validate: wrapped,
-		Stdin:    promptStdin(),
+		Label:     label,
+		Default:   defaultVal,
+		AllowEdit: defaultVal != "",
+		Validate:  wrapped,
+		Stdin:     promptStdin(),
 	}
 	value, err := p.Run()
 	if err != nil {
