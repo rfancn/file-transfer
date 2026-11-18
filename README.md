@@ -234,7 +234,7 @@ make build
 > - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
 > - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
 > - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
-> - `v0.0.1` 及更早版本为每个用户创建并绑定了 `ft-user-<username>-policy`；`v0.0.2` 起改用组策略，不再创建新的单用户策略，但不会自动解绑从旧版本升级上来的策略。这些旧策略不含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，仍绑定旧策略的用户可能绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
+> - `v0.0.1` 及更早版本为每个用户创建并绑定了 `ft-user-<username>-policy`；`v0.0.2` 起不再创建新的单用户策略，仅使用组策略，但不会自动解绑从旧版本升级上来的策略。这些旧策略不含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，仍绑定旧策略的用户可能绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
 > - 解绑/删除旧策略可使用 RustFS Console，或使用 `mc admin policy detach <alias> ft-user-<username>-policy --user <username>` 与 `mc admin policy remove <alias> ft-user-<username>-policy`；删除前请确认没有用户或组仍引用。`ft-admin` 目前没有策略解绑/删除命令。
 > - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`，去掉 policy 挂载的 `:ro`，否则调用白名单接口会返回 `policy_write_failed`。
 > - 将新版本带 `Sid` 的 `policy/*.json` 合并到服务端策略目录后再重启并执行 `ft-admin init`；旧模板缺少 Sid 时接口会返回 `sid_not_found`，仅执行 `ft-admin init` 不会补上 Sid。
@@ -308,7 +308,7 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 > **注意：升级前请备份 `policy/`。** 整体覆盖 `policy/*.json` 会丢失已设置的 IP 白名单：
 >
 > ```sh
-> cp -r policy policy.bak
+> cp -r policy ~/policy.bak
 > ```
 >
 > 升级后合并新模板时保留 `aws:SourceIp` 条件，确认白名单仍然存在。
