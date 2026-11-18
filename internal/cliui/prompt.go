@@ -101,10 +101,6 @@ func Select(label string, items []string) (int, error) {
 
 // Input 显示带默认值的单行输入；validate 非 nil 时实时校验。
 func Input(label, defaultVal string, validate ValidateFunc) (string, error) {
-	display := label
-	if defaultVal != "" {
-		display = fmt.Sprintf("%s [%s]", label, defaultVal)
-	}
 	if !IsInteractive() {
 		return readFromStdin(inputPrompt(label, defaultVal), defaultVal, validate)
 	}
@@ -118,7 +114,8 @@ func Input(label, defaultVal string, validate ValidateFunc) (string, error) {
 		}
 	}
 	p := promptui.Prompt{
-		Label:    display,
+		Label:    label,
+		Default:  defaultVal,
 		Validate: wrapped,
 		Stdin:    promptStdin(),
 	}
