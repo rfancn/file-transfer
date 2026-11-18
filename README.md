@@ -226,21 +226,6 @@ make build
 
 完整配置见 [config/ft-server.example.toml](config/ft-server.example.toml)。
 
-> **升级说明：**
->
-> - `s3.bucket` 已移除。请把原桶名填入 `s3.home_bucket`，并补充 `shared_bucket` / `shared_dirs`；保留旧 `bucket` 键会导致启动报错。
-> - 环境变量只保留 `FT_S3_ENDPOINT`。配置文件路径改用 `-c` / `--config`，不再读取 `FT_SERVER_CONFIG` / `FT_CLIENT_CONFIG` / `FT_ADMIN_CONFIG`。
-> - 命令行长参数统一使用 `--`，例如 `--config`、`--group`、`--days`；旧的 `-config` 等单横线写法不再支持。
-> - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
-> - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
-> - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
-> - `v0.0.1` 及更早版本为每个用户创建并绑定了 `ft-user-<username>-policy`；`v0.0.2` 起不再创建新的单用户策略，仅使用组策略，但不会自动解绑从旧版本升级上来的策略。这些旧策略不含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，仍绑定旧策略的用户可能绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
-> - 解绑/删除旧策略可使用 RustFS Console，或使用 `mc admin policy detach <alias> ft-user-<username>-policy --user <username>` 与 `mc admin policy remove <alias> ft-user-<username>-policy`；删除前请确认没有用户或组仍引用。`ft-admin` 目前没有策略解绑/删除命令。
-> - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`：policy 挂载改为 `./policy:/app/policy`（可写），否则策略目录和 IP 白名单接口都会失效。
-> - 将新版本带 `Sid` 的 `policy/*.json` 合并到服务端策略目录后再重启并执行 `ft-admin init`；旧模板缺少 Sid 时接口会返回 `sid_not_found`，仅执行 `ft-admin init` 不会补上 Sid。
-> - 如需使用 IP 白名单，策略目录必须由运行 `ft-server` 的用户可写（非 Docker / rootless 部署请检查属主和权限）。
-> - 策略目录改为工作目录下的 `policy`（Docker 为 `/app/policy`），不再回退到配置文件目录；升级时请把原 `/etc/file-transfer/policy` 移动到新位置。
-
 首次启动时：
 
 - `auth.token_secret` / `auth.upload_secret` 为空或仍为示例值时，会自动生成随机密钥并写回配置；
@@ -306,14 +291,6 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - 使用 IP 白名单功能时，运行 `ft-server` 的用户必须对服务端 `policy/` 目录有写权限；不使用该功能时只读即可。
 - 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
 
-> **注意：升级前请备份 `policy/`。** 整体覆盖 `policy/*.json` 会丢失已设置的 IP 白名单：
->
-> ```sh
-> cp -r policy ~/policy.bak
-> ```
->
-> 升级后合并新模板时保留 `aws:SourceIp` 条件，确认白名单仍然存在。
-
 ##### 策略语句 IP 白名单
 
 可以为三个组策略中的指定语句（Sid）增加 `aws:SourceIp` 条件，只有来自指定网段的请求才能使用该语句的权限。
@@ -354,7 +331,7 @@ Content-Type: application/json
 
 - 只允许 `ft-user-policy`、`ft-operator-policy`、`shared-operator-policy`；
 - `cidrs: []` 表示清除该语句的 IP 白名单；
-- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff；变更后请备份到仓库外，或仅在受控分支中提交，并注意区分不同环境的网段；
+- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff；
 - 通过管理接口或 `ft-admin policy ip` 修改时立即下发到 RustFS，无需重启；
 - 若接口返回 `apply_failed`，表示模板已更新但下发失败，重试本接口或执行 `ft-admin init` 即可。
 

@@ -139,8 +139,6 @@ Content-Type: application/json
 | `SharedMarkerProtect` | 保护共享目录 `.keep` |
 | `SharedBucketDeleteDeny` | 禁止删除 shared 桶 |
 
-模板升级后，已有部署需重新执行一次 `ft-admin init`，或直接通过新接口设置一次（接口会应用含 Sid 的新模板）。
-
 ## 6. 服务端实现
 
 ### 6.1 `internal/iam`
@@ -242,7 +240,6 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
   - `ft-admin policy ip` 用法；
   - 三个策略的 Sid 对照表；
   - 策略目录必须可写；
-  - 升级覆盖 `policy/*.json` 会丢失 IP 规则，升级前需保留/合并。
 
 ## 9. 测试
 
@@ -261,7 +258,7 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
   实现采用 AWS 标准键名，必须在目标 RustFS 版本上实测：用白名单外地址访问应被拒。
 - RustFS 文档未明确提到 `Sid`，但 MinIO 的策略解析库支持；同样需要在目标版本上实测，
   确认带 Sid 的策略可以正常加载和生效。
-- 直接修改模板会让工作区出现未提交改动；升级覆盖模板会丢失规则，已在文档中提示。
+- 直接修改模板会让工作区出现未提交改动。
 - 替换策略时存在极短的解绑/重绑窗口，期间相关组可能短暂无权限；属管理操作可接受。
 - 模板写回后下发失败时，本地模板已是新规则而线上策略可能仍是旧规则；接口返回 `apply_failed`，
   重试本接口或执行 `ft-admin init` 可重新下发并自愈。
