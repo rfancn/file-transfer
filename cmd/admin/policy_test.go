@@ -59,7 +59,7 @@ func TestValidatePolicyIPArgs(t *testing.T) {
 func TestBuildPolicyIPItems(t *testing.T) {
 	cidrs := []string{"10.0.0.0/8", "192.168.1.0/24"}
 	items, actions := buildPolicyIPItems(cidrs, map[string]bool{"192.168.1.0/24": true})
-	if len(items) != 7 || len(actions) != 7 {
+	if len(items) != 5 || len(actions) != 5 {
 		t.Fatalf("items=%d actions=%d", len(items), len(actions))
 	}
 	if items[0].Text != "10.0.0.0/8" || !items[0].Selectable || items[0].Checked {
@@ -71,7 +71,7 @@ func TestBuildPolicyIPItems(t *testing.T) {
 	if actions[2].kind != ipActionDelete || items[2].Selectable {
 		t.Fatalf("delete action = %+v item=%+v", actions[2], items[2])
 	}
-	for i, want := range []string{ipActionAdd, ipActionSet, ipActionClear, ipActionReturn} {
+	for i, want := range []string{ipActionAdd, ipActionReturn} {
 		if actions[3+i].kind != want {
 			t.Fatalf("actions[%d] = %q, want %q", 3+i, actions[3+i].kind, want)
 		}

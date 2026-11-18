@@ -186,8 +186,6 @@ func runPolicyIPOperations(ac *adminapi.Client, policyName, sid string) {
 			"查看当前 IP 白名单",
 			"添加 IP 或网段",
 			"移除 IP 或网段",
-			"覆盖设置",
-			"清空",
 			"返回",
 		})
 		if canceledByUser(err) {
@@ -201,14 +199,10 @@ func runPolicyIPOperations(ac *adminapi.Client, policyName, sid string) {
 		case 0:
 			listPolicyIPs(ac, policyName, sid)
 		case 1:
-			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeAdd)
+			addPolicyIPsMenu(ac, policyName, sid)
 		case 2:
 			removePolicyIPsMenu(ac, policyName, sid)
 		case 3:
-			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeSet)
-		case 4:
-			clearPolicyIPs(ac, policyName, sid)
-		case 5:
 			return
 		}
 	}
@@ -223,8 +217,6 @@ const (
 	ipActionEntry  = "entry"
 	ipActionDelete = "delete"
 	ipActionAdd    = "add"
-	ipActionSet    = "set"
-	ipActionClear  = "clear"
 	ipActionReturn = "return"
 )
 
@@ -269,13 +261,7 @@ func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
 			removePolicyIPs(ac, policyName, sid, selected)
 			checked = map[string]bool{}
 		case ipActionAdd:
-			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeAdd)
-			checked = map[string]bool{}
-		case ipActionSet:
-			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeSet)
-			checked = map[string]bool{}
-		case ipActionClear:
-			clearPolicyIPs(ac, policyName, sid)
+			addPolicyIPsMenu(ac, policyName, sid)
 			checked = map[string]bool{}
 		case ipActionReturn:
 			return
@@ -285,8 +271,8 @@ func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
 
 // buildPolicyIPItems 把当前 IP 白名单和操作项转为多选列表。
 func buildPolicyIPItems(cidrs []string, checked map[string]bool) ([]cliui.MultiItem, []policyIPAction) {
-	items := make([]cliui.MultiItem, 0, len(cidrs)+5)
-	actions := make([]policyIPAction, 0, len(cidrs)+5)
+	items := make([]cliui.MultiItem, 0, len(cidrs)+3)
+	actions := make([]policyIPAction, 0, len(cidrs)+3)
 	for _, cidr := range cidrs {
 		items = append(items, cliui.MultiItem{Text: cidr, Selectable: true, Checked: checked[cidr]})
 		actions = append(actions, policyIPAction{kind: ipActionEntry, cidr: cidr})
@@ -297,8 +283,6 @@ func buildPolicyIPItems(cidrs []string, checked map[string]bool) ([]cliui.MultiI
 	}{
 		{"[删除选中项]", ipActionDelete},
 		{"[添加 IP 或网段]", ipActionAdd},
-		{"[覆盖设置]", ipActionSet},
-		{"[清空]", ipActionClear},
 		{"[返回]", ipActionReturn},
 	} {
 		items = append(items, cliui.MultiItem{Text: action.text})
@@ -371,7 +355,7 @@ func removePolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string
 	printPolicyIPs(res)
 }
 
-func changePolicyIPsMenu(ac *adminapi.Client, policyName, sid, mode string) {
+func addPolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
 	cidrs, ok := promptIPs()
 	if !ok {
 		return
@@ -380,37 +364,15 @@ func changePolicyIPsMenu(ac *adminapi.Client, policyName, sid, mode string) {
 		failf("%v", err)
 		return
 	}
-	switch mode {
-	case iam.IPRangeAdd:
-		fmt.Printf("将向策略 %s 语句 %s 添加：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-	case iam.IPRangeRemove:
-		fmt.Printf("将从策略 %s 语句 %s 移除：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-	default:
-		fmt.Printf("将策略 %s 语句 %s 的 IP 白名单覆盖为：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-	}
-	if !confirm("确认修改") {
+	fmt.Printf("将向策略 %s 语句 %s 添加：%s\n", policyName, sid, strings.Join(cidrs, ", "))
+	if !confirm("确认添加") {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, mode)
+	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, iam.IPRangeAdd)
 	if err != nil {
-		failf("修改 IP 白名单失败: %v", err)
-		return
-	}
-	printPolicyIPs(res)
-}
-
-func clearPolicyIPs(ac *adminapi.Client, policyName, sid string) {
-	fmt.Printf("将清空策略 %s 语句 %s 的 IP 白名单。\n", policyName, sid)
-	if !confirm("确认清空") {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, nil, iam.IPRangeSet)
-	if err != nil {
-		failf("清空 IP 白名单失败: %v", err)
+		failf("添加 IP 白名单失败: %v", err)
 		return
 	}
 	printPolicyIPs(res)
