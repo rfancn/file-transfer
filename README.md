@@ -234,7 +234,10 @@ make build
 > - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
 > - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
 > - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
-> - 旧版本可能留下 `ft-user-<username>-policy` 孤儿策略（用户删除后不再被绑定）。升级后可按前缀手工清理，不影响新版本鉴权。
+> - 旧版本（`e4ed5e1` 之前）为每个用户创建并绑定了 `ft-user-<username>-policy`。升级后这些策略可能仍绑定在现有用户上，且不包含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，这些用户仍可能通过旧策略绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
+> - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`，去掉 policy 挂载的 `:ro`，否则调用白名单接口会返回 `policy_write_failed`。
+> - 将新版本带 `Sid` 的 `policy/*.json` 合并到服务端策略目录后再重启并执行 `ft-admin init`；旧模板缺少 Sid 时接口会返回 `sid_not_found`，仅执行 `ft-admin init` 不会补上 Sid。
+> - 策略目录必须由运行 `ft-server` 的用户可写（非 Docker / rootless 部署请检查属主和权限）。
 
 首次启动时：
 
@@ -296,12 +299,22 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
 - 策略目录固定为 `policy`，依次在工作目录和配置文件所在目录查找，无需配置。
 - Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 挂载到该路径（可写，供策略 IP 白名单修改模板）。
-- 修改策略后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
-- 策略目录必须可写：`ft-admin policy ip` 会直接修改 `policy/*.json` 并立即下发。
+- 手工修改 `policy/*.json` 后，需要重启 `ft-server` 并执行 `ft-admin init` 使策略在 RustFS 生效。
+- 通过管理接口或 `ft-admin policy ip` 修改时，规则会立即下发到 RustFS，无需重启。
+- 使用 IP 白名单功能时，运行 `ft-server` 的用户必须对服务端 `policy/` 目录有写权限；不使用该功能时只读即可。
 - 升级时如果整体覆盖 `policy/*.json`，已设置的 IP 白名单会丢失；升级前请保留或合并这些文件。
+
+> **注意：升级前请备份 `policy/`。** 整体覆盖 `policy/*.json` 会丢失已设置的 IP 白名单：
+>
+> ```sh
+> cp -r policy policy.bak
+> ```
+>
+> 升级后合并新模板时保留 `aws:SourceIp` 条件，确认白名单仍然存在。
+
 - 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
 
-#### 策略语句 IP 白名单
+##### 策略语句 IP 白名单
 
 可以为三个组策略中的指定语句（Sid）增加 `aws:SourceIp` 条件，只有来自指定网段的请求才能使用该语句的权限。
 
@@ -315,11 +328,42 @@ Content-Type: application/json
 { "cidrs": ["10.0.0.0/8", "192.168.1.0/24"] }
 ```
 
+`cidrs` 必须显式提供，缺失返回 `invalid_request`；支持 IPv4/IPv6，最多 100 条，服务端会自动去重并规范化为掩码形式；只支持 `Allow` 语句。
+
+成功响应：
+
+```json
+{ "policy": "ft-user-policy", "sid": "UploadWrite", "cidrs": ["10.0.0.0/8"] }
+```
+
+错误码：
+
+| HTTP | code | 说明 |
+|---|---|---|
+| 400 | `invalid_request` | 请求体非法或缺少 `cidrs` |
+| 400 | `invalid_cidr` | 网段格式非法 |
+| 400 | `unsupported_policy` | 策略不在允许范围 |
+| 403 | `service_policy` | 不允许修改服务身份策略 |
+| 400 | `sid_not_found` | 策略中不存在该 Sid |
+| 400 | `statement_not_allow` | 目标语句不是 Allow |
+| 500 | `invalid_policy` | 策略内容无效 |
+| 500 | `policy_write_failed` | 策略目录不可写 |
+| 502 | `apply_failed` | 模板已写入但下发失败 |
+| 502 | `rustfs_unavailable` | RustFS 管理服务不可用 |
+
 - 只允许 `ft-user-policy`、`ft-operator-policy`、`shared-operator-policy`；
 - `cidrs: []` 表示清除该语句的 IP 白名单；
-- 规则写入对应 `policy/*.json` 模板，需要策略目录可写；
-- 修改后立即下发 RustFS，无需重启；
+- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff，变更后请提交或备份；
+- 通过管理接口或 `ft-admin policy ip` 修改时立即下发到 RustFS，无需重启；
 - 若接口返回 `apply_failed`，表示模板已更新但下发失败，重试本接口或执行 `ft-admin init` 即可。
+
+> **注意**
+>
+> - `0.0.0.0/0` 或 `::/0` 等同允许所有地址，等于关闭该语句的 IP 限制。
+> - 网段设置错误会导致该语句的权限对所有用户失效（例如 `UploadWrite` 设错会导致所有用户无法上传）。
+> - 管理接口本身不受这些 S3 策略限制，仍可通过 `ft-admin policy ip ... --clear` 或重新设置正确网段恢复。
+> - 设置后请分别从白名单内、外地址验证。
+> - 该功能依赖 RustFS 对 `Sid` 和 `aws:SourceIp` 的支持，请先在目标版本上实测。
 
 命令：
 
@@ -328,17 +372,24 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 192.168.1.0/24
 ft-admin policy ip ft-user-policy UploadWrite --clear
 ```
 
+- `--clear` 不能与网段参数同时使用；
+- 非交互执行时必须提供网段或 `--clear`；
+- 单个位置参数可用逗号分隔多个网段；
+- `--yes` 跳过确认。
+
 常用 Sid：
 
 | 策略 | Sid | 说明 |
 |---|---|---|
 | `ft-user-policy` | `UploadWrite` | 自己的 `upload/` 写/删 |
-| `ft-user-policy` | `SharedRead` | 读取共享目录 |
+| `ft-user-policy` | `SharedRead` | 读取 `s3.shared_dirs` 共享目录中的对象 |
 | `ft-operator-policy` | `InboundWrite` | 所有用户 `inbound` 写/删 |
 | `ft-operator-policy` | `OutboundRead` | 读取所有用户 `outbound` |
 | `shared-operator-policy` | `SharedWrite` | 写/删共享桶对象 |
 
 完整 Sid 列表见 `policy/*.json` 中的 `Sid` 字段。
+
+设置后建议从白名单内、外地址分别验证该语句的权限，并检查 `policy/*.json` 中的 `aws:SourceIp` 条件。
 
 ### 3. 初始化 RustFS
 
