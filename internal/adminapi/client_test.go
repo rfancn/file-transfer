@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/protocol"
 )
 
 func TestLogin(t *testing.T) {
@@ -200,6 +201,75 @@ func TestClean(t *testing.T) {
 	}
 	if res.Count != 2 || len(res.Items) != 2 || !res.DryRun {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestSetStatementIPRanges(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	var gotCidrs []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var req protocol.SetStatementIPRangesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		if req.Cidrs != nil {
+			gotCidrs = *req.Cidrs
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{
+			Policy: "ft-user-policy",
+			Sid:    "UploadWrite",
+			Cidrs:  gotCidrs,
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	res, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer admin-token" || gotMethod != http.MethodPut {
+		t.Fatalf("auth=%q method=%q", gotAuth, gotMethod)
+	}
+	if gotPath != "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if len(gotCidrs) != 2 || gotCidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs = %v", gotCidrs)
+	}
+	if res.Policy != "ft-user-policy" || res.Sid != "UploadWrite" || len(res.Cidrs) != 2 {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestSetStatementIPRangesClearSendsEmptyArray(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{Policy: "ft-user-policy", Sid: "UploadWrite", Cidrs: []string{}})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.SetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"cidrs":[]}` {
+		t.Fatalf("body = %s", gotBody)
 	}
 }
 

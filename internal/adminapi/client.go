@@ -201,6 +201,31 @@ func (c *Client) Clean(ctx context.Context, dir string, days int, dryRun bool) (
 	return out, nil
 }
 
+// SetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
+func (c *Client) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string) (protocol.SetStatementIPRangesResponse, error) {
+	var out protocol.SetStatementIPRangesResponse
+	values := cidrs
+	if values == nil {
+		values = []string{}
+	}
+	payload, err := json.Marshal(protocol.SetStatementIPRangesRequest{Cidrs: &values})
+	if err != nil {
+		return out, err
+	}
+	u := c.baseURL + "/v1/admin/policies/" + url.PathEscape(policyName) +
+		"/statements/" + url.PathEscape(sid) + "/ip-ranges"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(payload))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func (c *Client) do(req *http.Request) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
