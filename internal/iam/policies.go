@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -27,11 +28,49 @@ type PolicyOptions struct {
 
 // Policies 保存从 policy 目录加载的 IAM 策略。
 type Policies struct {
+	mu             sync.RWMutex
 	Group          []byte
 	Operator       []byte
 	SharedOperator []byte
 	Data           []byte
 	Admin          []byte
+}
+
+// Document 返回指定组策略当前的渲染文档副本。
+func (p *Policies) Document(name string) ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	switch name {
+	case UserGroupPol:
+		return cloneBytes(p.Group), nil
+	case AdminGroupPol:
+		return cloneBytes(p.Operator), nil
+	case SharedAdminPol:
+		return cloneBytes(p.SharedOperator), nil
+	default:
+		return nil, ErrUnsupportedPolicy
+	}
+}
+
+// SetDocument 更新指定组策略的渲染文档。
+func (p *Policies) SetDocument(name string, doc []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch name {
+	case UserGroupPol:
+		p.Group = cloneBytes(doc)
+	case AdminGroupPol:
+		p.Operator = cloneBytes(doc)
+	case SharedAdminPol:
+		p.SharedOperator = cloneBytes(doc)
+	default:
+		return ErrUnsupportedPolicy
+	}
+	return nil
+}
+
+func cloneBytes(b []byte) []byte {
+	return append([]byte(nil), b...)
 }
 
 // LoadPolicies 从 dir 读取策略文件，按 opts 渲染占位符并校验 JSON。
@@ -113,6 +152,11 @@ func renderPolicy(path string, raw []byte, opts PolicyOptions) ([]byte, error) {
 		return nil, fmt.Errorf("策略 %s 包含未知占位符", path)
 	}
 	return []byte(rendered), nil
+}
+
+// RenderPolicy 渲染策略模板，供运行时修改策略后重新生成内存文档。
+func RenderPolicy(name string, raw []byte, opts PolicyOptions) ([]byte, error) {
+	return renderPolicy(name, raw, opts)
 }
 
 func validatePolicyJSON(raw []byte) error {

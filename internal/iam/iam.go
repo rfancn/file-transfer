@@ -38,14 +38,13 @@ const (
 // groupSpec 描述一个可分配的用户组及其绑定的策略。
 type groupSpec struct {
 	policy string
-	doc    func(*Policies) []byte
 }
 
 // groupSpecs 是用户组到策略的统一映射，新增组时只改这里。
 var groupSpecs = map[string]groupSpec{
-	UserGroup:        {UserGroupPol, func(p *Policies) []byte { return p.Group }},
-	AdminGroup:       {AdminGroupPol, func(p *Policies) []byte { return p.Operator }},
-	SharedAdminGroup: {SharedAdminPol, func(p *Policies) []byte { return p.SharedOperator }},
+	UserGroup:        {UserGroupPol},
+	AdminGroup:       {AdminGroupPol},
+	SharedAdminGroup: {SharedAdminPol},
 }
 
 // IsValidGroup 返回 name 是否为可分配的用户组。
@@ -345,7 +344,11 @@ func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (
 // applyGroupPolicy 把组对应的策略绑定到该组。
 func (m *Manager) applyGroupPolicy(ctx context.Context, group string) error {
 	spec := groupSpecs[group]
-	return m.ReplacePolicy(ctx, spec.policy, spec.doc(m.Policies), nil, []string{group})
+	doc, err := m.Policies.Document(spec.policy)
+	if err != nil {
+		return err
+	}
+	return m.ReplacePolicy(ctx, spec.policy, doc, nil, []string{group})
 }
 
 func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error) {

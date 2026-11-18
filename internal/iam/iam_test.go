@@ -2,9 +2,11 @@ package iam
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -501,6 +503,60 @@ func TestIsSystemUser(t *testing.T) {
 			t.Fatalf("%s should not be a system user", name)
 		}
 	}
+}
+
+func TestPoliciesDocument(t *testing.T) {
+	p := loadTestPolicies(t)
+	doc, err := p.Document(UserGroupPol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(doc) != string(p.Group) {
+		t.Fatal("Document 返回值与 Group 不一致")
+	}
+	updated := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
+	if err := p.SetDocument(UserGroupPol, updated); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = p.Document(UserGroupPol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(doc) != string(updated) {
+		t.Fatalf("Document = %s", doc)
+	}
+	doc[0] = 'x'
+	again, _ := p.Document(UserGroupPol)
+	if again[0] == 'x' {
+		t.Fatal("Document 返回了内部切片")
+	}
+	if _, err := p.Document(DataPolicy); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
+	}
+	if err := p.SetDocument(ServerAdminPol, updated); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
+	}
+}
+
+func TestPoliciesConcurrentDocumentAccess(t *testing.T) {
+	p := loadTestPolicies(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = p.Document(UserGroupPol)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = p.SetDocument(UserGroupPol, []byte(`{"Version":"2012-10-17","Statement":[]}`))
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestPolicyTemplateSIDs(t *testing.T) {
