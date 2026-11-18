@@ -300,7 +300,7 @@ func writePolicyError(c *gin.Context, err error) {
 	case errors.Is(err, iam.ErrUnsupportedPolicy):
 		response.Err(c, http.StatusBadRequest, "unsupported_policy", "只允许 ft-user-policy、ft-operator-policy、shared-operator-policy")
 	case errors.Is(err, iam.ErrSIDNotFound):
-		response.Err(c, http.StatusBadRequest, "sid_not_found", "策略中不存在指定 Sid，请先执行 ft-admin init 更新策略")
+		response.Err(c, http.StatusBadRequest, "sid_not_found", "策略中不存在指定 Sid，请确认 policy/*.json 包含该 Sid，并执行 ft-admin init 更新策略")
 	case errors.Is(err, iam.ErrStatementNotAllow):
 		response.Err(c, http.StatusBadRequest, "statement_not_allow", "只能给 Allow 语句设置 IP 白名单")
 	case errors.Is(err, iam.ErrInvalidPolicy):
