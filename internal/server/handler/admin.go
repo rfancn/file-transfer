@@ -151,16 +151,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 	}
 	if action != "" {
 		logging.Warn("已创建"+role+"用户", "username", username, "group", group)
-		logging.Audit(logging.AuditEvent{
-			Action:    action,
-			Actor:     c.GetString("admin"),
-			ActorType: "admin",
-			Target:    username,
-			Result:    "success",
-			RequestID: c.GetString("request_id"),
-			RemoteIP:  c.ClientIP(),
-		})
-		c.Set("audit_logged", true)
+		c.Set("audit_action", action)
 	}
 	response.JSON(c, http.StatusCreated, protocol.AddUserResponse{Username: username, Password: password})
 }
@@ -293,27 +284,12 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	policyName := c.Param("name")
 	sid := c.Param("sid")
 	c.Set("audit_target", policyName+"/"+sid)
-	opts := iam.PolicyOptions{
-		HomeBucket:   h.Cfg.S3.HomeBucket,
-		SharedBucket: h.Cfg.S3.SharedBucket,
-		SharedDirs:   h.Cfg.S3.SharedDirs,
-	}
-	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, strings.TrimSpace(req.Mode), opts)
+	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, strings.TrimSpace(req.Mode))
 	if err != nil {
 		logging.Error("admin set statement ip ranges", "policy", policyName, "sid", sid, "err", err)
 		writePolicyError(c, err)
 		return
 	}
-	logging.Audit(logging.AuditEvent{
-		Action:    "admin.policy.ip.set",
-		Actor:     c.GetString("admin"),
-		ActorType: "admin",
-		Target:    policyName + "/" + sid,
-		Result:    "success",
-		RequestID: c.GetString("request_id"),
-		RemoteIP:  c.ClientIP(),
-	})
-	c.Set("audit_logged", true)
 	logging.Info("admin policy ip set",
 		"policy", policyName,
 		"sid", sid,
@@ -332,11 +308,11 @@ func writePolicyError(c *gin.Context, err error) {
 	case errors.Is(err, iam.ErrInvalidCIDR):
 		response.Err(c, http.StatusBadRequest, "invalid_cidr", err.Error())
 	case errors.Is(err, iam.ErrInvalidMode):
-		response.Err(c, http.StatusBadRequest, "invalid_mode", "mode 只允许 set、add 或 remove")
+		response.Err(c, http.StatusBadRequest, "invalid_mode", "mode 只允许 "+iam.IPRangeSet+"、"+iam.IPRangeAdd+" 或 "+iam.IPRangeRemove)
 	case errors.Is(err, iam.ErrServicePolicy):
 		response.Err(c, http.StatusForbidden, "service_policy", err.Error())
 	case errors.Is(err, iam.ErrUnsupportedPolicy):
-		response.Err(c, http.StatusBadRequest, "unsupported_policy", "只允许 ft-user-policy、ft-operator-policy、shared-operator-policy")
+		response.Err(c, http.StatusBadRequest, "unsupported_policy", "只允许 "+strings.Join(iam.EditablePolicies(), "、"))
 	case errors.Is(err, iam.ErrSIDNotFound):
 		response.Err(c, http.StatusBadRequest, "sid_not_found", "策略中不存在指定 Sid，请确认 policy/*.json 包含该 Sid，并执行 ft-admin init 更新策略")
 	case errors.Is(err, iam.ErrStatementNotAllow):

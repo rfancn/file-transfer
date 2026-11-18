@@ -43,16 +43,18 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 		return nil, fmt.Errorf("管理身份客户端: %w", err)
 	}
 	policyDir := resolvePolicyDir()
-	policies, err := iam.LoadPolicies(policyDir, iam.PolicyOptions{
+	policyOpts := iam.PolicyOptions{
 		HomeBucket:   cfg.S3.HomeBucket,
 		SharedBucket: cfg.S3.SharedBucket,
 		SharedDirs:   cfg.S3.SharedDirs,
-	})
+	}
+	policies, err := iam.LoadPolicies(policyDir, policyOpts)
 	if err != nil {
 		return nil, fmt.Errorf("加载 IAM 策略: %w", err)
 	}
 	im.Policies = policies
 	im.PolicyDir = policyDir
+	im.Options = policyOpts
 	im.PlaceholderS3 = data
 	adminPath := adminuser.Path()
 	admins, initialPassword, err := adminuser.LoadOrCreate(adminPath)

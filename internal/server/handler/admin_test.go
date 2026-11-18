@@ -99,7 +99,9 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := &Handler{App: &app.App{IAM: &iam.Manager{}}}
+			h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{
+				Group: []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow"}]}`),
+			}}}}
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest(http.MethodPut, "/v1/admin/policies/x/statements/y/ip-ranges", strings.NewReader(tt.body))

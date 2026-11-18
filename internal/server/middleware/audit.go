@@ -44,10 +44,6 @@ func Audit() gin.HandlerFunc {
 		if !strings.HasPrefix(c.Request.URL.Path, "/v1/") {
 			return
 		}
-		// handler 已经写过更具体的审计事件时，避免重复。
-		if c.GetBool("audit_logged") {
-			return
-		}
 		actor := c.GetString("admin")
 		actorType := "admin"
 		if actor == "" {
@@ -58,7 +54,10 @@ func Audit() gin.HandlerFunc {
 			actor = "anonymous"
 			actorType = "anonymous"
 		}
-		action := auditAction(c.Request.Method, c.FullPath())
+		action := c.GetString("audit_action")
+		if action == "" {
+			action = auditAction(c.Request.Method, c.FullPath())
+		}
 		if action == "" {
 			action = c.Request.Method + " " + c.Request.URL.Path
 		}

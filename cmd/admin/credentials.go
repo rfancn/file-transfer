@@ -19,6 +19,11 @@ const defaultAdminServerURL = "http://127.0.0.1:8080"
 
 // promptCredential 交互读取一项凭据。ok 为 false 表示用户取消。
 func promptCredential(label string, secret bool) (value string, ok bool) {
+	return promptCredentialWithDefault(label, "", secret)
+}
+
+// promptCredentialWithDefault 读取凭据；非密码项支持默认值。
+func promptCredentialWithDefault(label, defaultVal string, secret bool) (value string, ok bool) {
 	var err error
 	if secret {
 		value, err = cliui.PasswordWithValidate(label, func(s string) error {
@@ -28,7 +33,7 @@ func promptCredential(label string, secret bool) (value string, ok bool) {
 			return nil
 		})
 	} else {
-		value, err = cliui.Input(label, "", nil)
+		value, err = cliui.Input(label, defaultVal, nil)
 	}
 	if canceledByUser(err) {
 		return "", false
@@ -80,26 +85,19 @@ func login(cfg config.AdminConfig, user, pass string) *adminapi.Client {
 
 // promptPassword 读取管理员密码；密码不能为空。
 func promptPassword() string {
+	if !cliui.IsInteractive() {
+		log.Fatal("缺少 ft-server 管理员密码（可用 --admin-password 提供）")
+	}
 	value, ok := promptCredential("ft-server 管理员密码", true)
 	if !ok {
-		if cliui.IsInteractive() {
-			os.Exit(130)
-		}
-		log.Fatal("缺少 ft-server 管理员密码（可用 --admin-password 提供）")
+		os.Exit(130)
 	}
 	return value
 }
 
 // promptAdminUsername 读取管理员用户名，默认 admin。
 func promptAdminUsername() (string, bool) {
-	value, err := cliui.Input("ft-server 管理员用户名", "admin", nil)
-	if canceledByUser(err) {
-		return "", false
-	}
-	if err != nil {
-		log.Fatalf("读取 ft-server 管理员用户名 失败: %v", err)
-	}
-	return strings.TrimSpace(value), true
+	return promptCredentialWithDefault("ft-server 管理员用户名", "admin", false)
 }
 
 // serverAdminCreds 返回 ft-server 管理员凭证：命令行参数优先，否则交互输入。
@@ -115,9 +113,6 @@ func serverAdminCreds(user, pass string) (string, string) {
 	}
 	if pass == "" {
 		pass = promptPassword()
-	}
-	if pass == "" {
-		log.Fatal("缺少 ft-server 管理员密码（可用 --admin-password 提供）")
 	}
 	return user, pass
 }

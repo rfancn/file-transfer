@@ -104,28 +104,29 @@ func setPolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string, c
 		cidrs = splitCIDRs([]string{value})
 		clear = len(cidrs) == 0
 	}
-	if !yes {
-		if clear {
-			fmt.Printf("将清除策略 %s 语句 %s 的 IP 白名单。\n", policyName, sid)
-		} else {
-			fmt.Printf("将策略 %s 语句 %s 的 IP 白名单设置为：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-		}
-		if !confirm("确认修改") {
-			return
-		}
+	if clear {
+		applyPolicyIPChange(ac, policyName, sid, nil, iam.IPRangeSet,
+			fmt.Sprintf("将清除策略 %s 语句 %s 的 IP 白名单。", policyName, sid), yes)
+		return
+	}
+	applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeSet,
+		fmt.Sprintf("将策略 %s 语句 %s 的 IP 白名单设置为：%s", policyName, sid, strings.Join(cidrs, ", ")), yes)
+}
+
+// applyPolicyIPChange 确认并执行一次 IP 白名单修改。
+func applyPolicyIPChange(ac *adminapi.Client, policyName, sid string, cidrs []string, mode, message string, yes bool) {
+	fmt.Println(message)
+	if !yes && !confirm("确认修改") {
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ac.SetStatementIPRanges(ctx, policyName, sid, cidrs)
+	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, mode)
 	if err != nil {
-		failf("设置 IP 白名单失败: %v", err)
+		failf("修改 IP 白名单失败: %v", err)
 		return
 	}
-	if len(res.Cidrs) == 0 {
-		fmt.Printf("已清除策略 %s 语句 %s 的 IP 白名单\n", res.Policy, res.Sid)
-		return
-	}
-	fmt.Printf("已设置策略 %s 语句 %s 的 IP 白名单：%s\n", res.Policy, res.Sid, strings.Join(res.Cidrs, ", "))
+	printPolicyIPs(res)
 }
 
 func runPolicyIPMenu(ac *adminapi.Client) {
@@ -341,18 +342,8 @@ func removePolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
 
 // removePolicyIPs 确认并批量移除指定的 IP 或网段。
 func removePolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string) {
-	fmt.Printf("将从策略 %s 语句 %s 移除：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-	if !confirm("确认移除") {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, iam.IPRangeRemove)
-	if err != nil {
-		failf("移除 IP 白名单失败: %v", err)
-		return
-	}
-	printPolicyIPs(res)
+	applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeRemove,
+		fmt.Sprintf("将从策略 %s 语句 %s 移除：%s", policyName, sid, strings.Join(cidrs, ", ")), false)
 }
 
 func addPolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
@@ -364,18 +355,8 @@ func addPolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
 		failf("%v", err)
 		return
 	}
-	fmt.Printf("将向策略 %s 语句 %s 添加：%s\n", policyName, sid, strings.Join(cidrs, ", "))
-	if !confirm("确认添加") {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, iam.IPRangeAdd)
-	if err != nil {
-		failf("添加 IP 白名单失败: %v", err)
-		return
-	}
-	printPolicyIPs(res)
+	applyPolicyIPChange(ac, policyName, sid, cidrs, iam.IPRangeAdd,
+		fmt.Sprintf("将向策略 %s 语句 %s 添加：%s", policyName, sid, strings.Join(cidrs, ", ")), false)
 }
 
 func printPolicyIPs(res protocol.SetStatementIPRangesResponse) {

@@ -35,24 +35,18 @@ var (
 	ErrApplyFailed       = errors.New("策略已持久化但下发 RustFS 失败")
 )
 
-// editablePolicies 是允许设置 IP 白名单的策略到模板文件和绑定组的映射。
-var editablePolicies = map[string]struct {
-	file  string
-	group string
-}{
-	UserGroupPol:   {policyUserGroupFile, UserGroup},
-	AdminGroupPol:  {policyOperatorFile, AdminGroup},
-	SharedAdminPol: {policySharedOperatorFile, SharedAdminGroup},
-}
-
 // EditablePolicies 返回允许设置 IP 白名单的策略名。
 func EditablePolicies() []string {
-	return []string{UserGroupPol, AdminGroupPol, SharedAdminPol}
+	out := make([]string, 0, len(policyDefs))
+	for _, def := range policyDefs {
+		out = append(out, def.Policy)
+	}
+	return out
 }
 
 // IsEditablePolicy 返回 policyName 是否允许设置 IP 白名单。
 func IsEditablePolicy(policyName string) bool {
-	_, ok := editablePolicies[policyName]
+	_, ok := policyDefForPolicy(policyName)
 	return ok
 }
 
@@ -61,18 +55,28 @@ func IsServicePolicy(policyName string) bool {
 	return policyName == DataPolicy || policyName == ServerAdminPol
 }
 
-// PolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid（按模板顺序）。
-func (m *Manager) PolicySids(policyName string) ([]string, error) {
+// editableDocument 校验策略并返回其定义和内存文档。
+func (m *Manager) editableDocument(policyName string) (policyDef, []byte, error) {
 	if IsServicePolicy(policyName) {
-		return nil, ErrServicePolicy
+		return policyDef{}, nil, ErrServicePolicy
 	}
-	if !IsEditablePolicy(policyName) {
-		return nil, ErrUnsupportedPolicy
+	def, ok := policyDefForPolicy(policyName)
+	if !ok {
+		return policyDef{}, nil, ErrUnsupportedPolicy
 	}
 	if m.Policies == nil {
-		return nil, ErrPolicyRead
+		return def, nil, ErrPolicyRead
 	}
 	doc, err := m.Policies.Document(policyName)
+	if err != nil {
+		return def, nil, err
+	}
+	return def, doc, nil
+}
+
+// PolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid（按模板顺序）。
+func (m *Manager) PolicySids(policyName string) ([]string, error) {
+	_, doc, err := m.editableDocument(policyName)
 	if err != nil {
 		return nil, err
 	}
@@ -210,16 +214,7 @@ func findAllowStatement(doc map[string]any, sid string) (map[string]any, error) 
 
 // StatementIPRanges 返回指定策略语句当前的 aws:SourceIp 列表。
 func (m *Manager) StatementIPRanges(policyName, sid string) ([]string, error) {
-	if IsServicePolicy(policyName) {
-		return nil, ErrServicePolicy
-	}
-	if !IsEditablePolicy(policyName) {
-		return nil, ErrUnsupportedPolicy
-	}
-	if m.Policies == nil {
-		return nil, ErrPolicyRead
-	}
-	doc, err := m.Policies.Document(policyName)
+	_, doc, err := m.editableDocument(policyName)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +287,7 @@ func applyIPRangeMode(current, changes []string, mode string) ([]string, error) 
 
 // SetStatementIPRanges 修改指定策略模板中的语句并立即下发到 RustFS。
 // 所有策略写操作共享 policyWriteMu（定义在 iam.go）。
-func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string, opts PolicyOptions) ([]string, error) {
+func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string) ([]string, error) {
 	if mode == "" {
 		mode = IPRangeSet
 	}
@@ -301,41 +296,43 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	default:
 		return nil, ErrInvalidMode
 	}
-	if IsServicePolicy(policyName) {
-		return nil, ErrServicePolicy
-	}
-	spec, ok := editablePolicies[policyName]
-	if !ok {
-		return nil, ErrUnsupportedPolicy
-	}
 	normalized, err := NormalizeCIDRs(cidrs)
 	if err != nil {
 		return nil, err
 	}
+	def, _, err := m.editableDocument(policyName)
+	if err != nil {
+		return nil, err
+	}
+	// 先做内存校验，非法策略/Sid 不发起 RustFS RPC。
+	if _, err := m.StatementIPRanges(policyName, sid); err != nil {
+		return nil, err
+	}
+
 	policyWriteMu.Lock()
 	defer policyWriteMu.Unlock()
 
 	// 先发现绑定关系，RustFS 列举失败时不修改本地模板。
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	users, groups, err := m.policyAttachments(listCtx, policyName, spec.group)
+	users, groups, err := m.policyAttachments(listCtx, policyName, def.Group)
 	if err != nil {
 		return nil, err
 	}
 
-	final := normalized
+	var current []string
 	if mode != IPRangeSet {
-		current, err := m.StatementIPRanges(policyName, sid)
-		if err != nil {
-			return nil, err
-		}
-		final, err = applyIPRangeMode(current, normalized, mode)
+		current, err = m.StatementIPRanges(policyName, sid)
 		if err != nil {
 			return nil, err
 		}
 	}
+	final, err := applyIPRangeMode(current, normalized, mode)
+	if err != nil {
+		return nil, err
+	}
 
-	applied, rendered, err := m.renderUpdatedPolicy(policyName, sid, final, opts)
+	rendered, err := m.renderUpdatedPolicy(def, sid, final)
 	if err != nil {
 		return nil, err
 	}
@@ -346,48 +343,37 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	if err := m.replacePolicy(applyCtx, policyName, rendered, users, groups); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrApplyFailed, err)
 	}
-	return applied, nil
+	return final, nil
 }
 
 // renderUpdatedPolicy 修改模板、原子写回并更新内存文档。
-func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, []byte, error) {
-	spec, ok := editablePolicies[policyName]
-	if !ok {
-		return nil, nil, ErrUnsupportedPolicy
-	}
-	normalized, err := NormalizeCIDRs(cidrs)
-	if err != nil {
-		return nil, nil, err
-	}
+func (m *Manager) renderUpdatedPolicy(def policyDef, sid string, cidrs []string) ([]byte, error) {
 	if m.PolicyDir == "" {
-		return nil, nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyRead)
+		return nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyRead)
 	}
-	if m.Policies == nil {
-		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyRead)
-	}
-	path := filepath.Join(m.PolicyDir, spec.file)
+	path := filepath.Join(m.PolicyDir, def.File)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %w", ErrPolicyRead, path, err)
+		return nil, fmt.Errorf("%w: 读取策略 %s: %w", ErrPolicyRead, path, err)
 	}
-	updated, err := SetStatementSourceIP(raw, sid, normalized)
+	updated, err := SetStatementSourceIP(raw, sid, cidrs)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	rendered, err := RenderPolicy(path, updated, opts)
+	rendered, err := renderPolicy(path, updated, m.Options)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
 	}
 	if err := validatePolicyJSON(rendered); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
 	}
 	if err := writeFileAtomic(path, updated); err != nil {
-		return nil, nil, fmt.Errorf("%w: %s: %v", ErrPolicyWrite, path, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrPolicyWrite, path, err)
 	}
-	if err := m.Policies.SetDocument(policyName, rendered); err != nil {
-		return nil, nil, err
+	if err := m.Policies.SetDocument(def.Policy, rendered); err != nil {
+		return nil, err
 	}
-	return normalized, rendered, nil
+	return rendered, nil
 }
 
 // hasPolicy 判断逗号分隔的策略列表是否包含 name。

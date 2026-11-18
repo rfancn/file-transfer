@@ -87,16 +87,14 @@ func TestEditablePolicyHelpers(t *testing.T) {
 		t.Fatal("未知策略不应允许编辑")
 	}
 
-	want := map[string]struct {
-		file  string
-		group string
-	}{
-		UserGroupPol:   {policyUserGroupFile, UserGroup},
-		AdminGroupPol:  {policyOperatorFile, AdminGroup},
-		SharedAdminPol: {policySharedOperatorFile, SharedAdminGroup},
+	want := map[string]policyDef{
+		UserGroupPol:   {UserGroup, UserGroupPol, policyUserGroupFile},
+		AdminGroupPol:  {AdminGroup, AdminGroupPol, policyOperatorFile},
+		SharedAdminPol: {SharedAdminGroup, SharedAdminPol, policySharedOperatorFile},
 	}
 	for name, w := range want {
-		if got := editablePolicies[name]; got != w {
+		got, ok := policyDefForPolicy(name)
+		if !ok || got != w {
 			t.Fatalf("%s 映射 = %#v, want %#v", name, got, w)
 		}
 	}
@@ -354,14 +352,12 @@ func TestRenderUpdatedPolicyWritesFileAndMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Manager{PolicyDir: dir, Policies: policies}
+	m := &Manager{PolicyDir: dir, Policies: policies, Options: opts}
+	def, _ := policyDefForPolicy(UserGroupPol)
 
-	normalized, rendered, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"10.0.0.1/8", "10.0.0.0/8"}, opts)
+	rendered, err := m.renderUpdatedPolicy(def, "UploadWrite", []string{"10.0.0.0/8"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(normalized) != 1 || normalized[0] != "10.0.0.0/8" {
-		t.Fatalf("normalized = %v", normalized)
 	}
 	if got := sourceIPs(t, parseStatements(t, rendered)["UploadWrite"]); len(got) != 1 || got[0] != "10.0.0.0/8" {
 		t.Fatalf("rendered aws:SourceIp = %v", got)
@@ -395,11 +391,12 @@ func TestRenderUpdatedPolicyClears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Manager{PolicyDir: dir, Policies: policies}
-	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, opts); err != nil {
+	m := &Manager{PolicyDir: dir, Policies: policies, Options: opts}
+	def, _ := policyDefForPolicy(UserGroupPol)
+	if _, err := m.renderUpdatedPolicy(def, "UploadWrite", []string{"10.0.0.0/8"}); err != nil {
 		t.Fatal(err)
 	}
-	_, rendered, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", nil, opts)
+	rendered, err := m.renderUpdatedPolicy(def, "UploadWrite", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,21 +412,16 @@ func TestRenderUpdatedPolicyRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Manager{PolicyDir: dir, Policies: policies}
-	if _, _, err := m.renderUpdatedPolicy(DataPolicy, "UploadWrite", nil, opts); !errors.Is(err, ErrUnsupportedPolicy) {
-		t.Fatalf("err = %v", err)
-	}
-	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "Missing", nil, opts); !errors.Is(err, ErrSIDNotFound) {
-		t.Fatalf("err = %v", err)
-	}
-	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"bad"}, opts); !errors.Is(err, ErrInvalidCIDR) {
+	m := &Manager{PolicyDir: dir, Policies: policies, Options: opts}
+	def, _ := policyDefForPolicy(UserGroupPol)
+	if _, err := m.renderUpdatedPolicy(def, "Missing", nil); !errors.Is(err, ErrSIDNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestSetStatementIPRangesRejectsServicePolicy(t *testing.T) {
 	m := &Manager{}
-	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, PolicyOptions{})
+	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet)
 	if !errors.Is(err, ErrServicePolicy) {
 		t.Fatalf("err = %v", err)
 	}
@@ -503,7 +495,7 @@ func TestSetStatementIPRangesValidatesCIDRBeforeAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"bad"}, IPRangeSet, opts)
+	_, err = m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"bad"}, IPRangeSet)
 	if !errors.Is(err, ErrInvalidCIDR) {
 		t.Fatalf("err = %v, want ErrInvalidCIDR", err)
 	}
@@ -629,17 +621,17 @@ func TestSetStatementIPRangesAddRemove(t *testing.T) {
 	}
 	oldDoc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
 	fake, adm := newFakeAdminServer(t, oldDoc)
-	m := &Manager{Admin: adm, Policies: policies, PolicyDir: dir}
+	m := &Manager{Admin: adm, Policies: policies, PolicyDir: dir, Options: opts}
 
-	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, opts); err != nil {
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"192.168.1.0/24"}, IPRangeAdd, opts); err != nil {
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"192.168.1.0/24"}, IPRangeAdd); err != nil {
 		t.Fatal(err)
 	}
 	assertStatementIPs(t, fake.lastAddedPolicy(t), "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"})
 
-	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeRemove, opts); err != nil {
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeRemove); err != nil {
 		t.Fatal(err)
 	}
 	assertStatementIPs(t, fake.lastAddedPolicy(t), "UploadWrite", []string{"192.168.1.0/24"})
