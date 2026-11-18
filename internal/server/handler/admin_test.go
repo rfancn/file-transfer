@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,36 @@ import (
 	"github.com/rfancn/file-transfer/internal/iam"
 	"github.com/rfancn/file-transfer/internal/server/app"
 )
+
+func TestWritePolicyError(t *testing.T) {
+	tests := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{iam.ErrInvalidCIDR, http.StatusBadRequest, "invalid_cidr"},
+		{iam.ErrServicePolicy, http.StatusForbidden, "service_policy"},
+		{iam.ErrUnsupportedPolicy, http.StatusBadRequest, "unsupported_policy"},
+		{iam.ErrSIDNotFound, http.StatusBadRequest, "sid_not_found"},
+		{iam.ErrStatementNotAllow, http.StatusBadRequest, "statement_not_allow"},
+		{iam.ErrInvalidPolicy, http.StatusInternalServerError, "invalid_policy"},
+		{iam.ErrPolicyRead, http.StatusInternalServerError, "policy_read_failed"},
+		{iam.ErrPolicyWrite, http.StatusInternalServerError, "policy_write_failed"},
+		{iam.ErrApplyFailed, http.StatusBadGateway, "apply_failed"},
+		{errors.New("other"), http.StatusBadGateway, "rustfs_unavailable"},
+	}
+	for _, tt := range tests {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		writePolicyError(c, tt.err)
+		if w.Code != tt.status {
+			t.Fatalf("%v: status = %d, want %d", tt.err, w.Code, tt.status)
+		}
+		if !strings.Contains(w.Body.String(), tt.code) {
+			t.Fatalf("%v: body = %s", tt.err, w.Body.String())
+		}
+	}
+}
 
 func TestAdminAddUserRejects(t *testing.T) {
 	gin.SetMode(gin.TestMode)

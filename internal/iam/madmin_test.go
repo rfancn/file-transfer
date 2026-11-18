@@ -1,5 +1,8 @@
 package iam
 
+// 本文件的 fake admin 依赖 madmin v3 的 /minio/admin/v3/... 端点，
+// 以及 attach/detach 返回 204 无响应体的行为；升级 madmin 时需同步调整。
+
 import (
 	"context"
 	"errors"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/minio/madmin-go/v3"
 )
@@ -44,6 +48,17 @@ func (f *fakeAdminServer) setFailAdd(fail bool) {
 func (f *fakeAdminServer) capturedAddBody() []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return append([]byte(nil), f.addBody...)
+}
+
+// lastAddedPolicy 返回最近一次 add-canned-policy 的请求体。
+func (f *fakeAdminServer) lastAddedPolicy(t *testing.T) []byte {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.addBody == nil {
+		t.Fatal("未记录到 add-canned-policy 请求")
+	}
 	return append([]byte(nil), f.addBody...)
 }
 
@@ -165,5 +180,45 @@ func TestSetStatementIPRangesApplyFailed(t *testing.T) {
 
 	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, opts); !errors.Is(err, ErrApplyFailed) {
 		t.Fatalf("err = %v, want ErrApplyFailed", err)
+	}
+}
+
+func TestApplyGroupPolicyReadsDocumentUnderWriteLock(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDoc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
+	newDoc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"],"Condition":{"IpAddress":{"aws:SourceIp":["10.0.0.0/8"]}}}]}`)
+	if err := policies.SetDocument(UserGroupPol, oldDoc); err != nil {
+		t.Fatal(err)
+	}
+	fake, adm := newFakeAdminServer(t, []byte(fakeOldPolicy))
+	m := &Manager{Admin: adm, Policies: policies, PolicyDir: dir}
+
+	// 先占住写锁：修复后的 applyGroupPolicy 会阻塞在锁上、尚未读取文档；
+	// 旧实现会先读到 oldDoc，再阻塞在 ReplacePolicy 的锁上。
+	policyWriteMu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- m.applyGroupPolicy(context.Background(), UserGroup)
+	}()
+	<-started
+	time.Sleep(200 * time.Millisecond)
+	if err := policies.SetDocument(UserGroupPol, newDoc); err != nil {
+		policyWriteMu.Unlock()
+		t.Fatal(err)
+	}
+	policyWriteMu.Unlock()
+
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	added := fake.lastAddedPolicy(t)
+	if !strings.Contains(string(added), `"aws:SourceIp"`) {
+		t.Fatalf("下发的是旧文档，竞态回归: %s", added)
 	}
 }

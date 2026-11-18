@@ -68,6 +68,7 @@ Content-Type: application/json
 | 策略中不存在该 Sid | 400 | `sid_not_found` |
 | Sid 对应的语句不是 Allow | 400 | `statement_not_allow` |
 | 同一策略中 Sid 重复 | 500 | `invalid_policy` |
+| 读取策略文件失败 | 500 | `policy_read_failed` |
 | 策略目录不可写 | 500 | `policy_write_failed` |
 | 模板已写入但下发 RustFS 失败 | 502 | `apply_failed` |
 | RustFS 不可用 | 502 | `rustfs_unavailable` |
