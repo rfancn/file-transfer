@@ -56,6 +56,7 @@ func menu(cfg config.AdminConfig, ac *adminapi.Client) {
 			"重置用户密码",
 			"列出用户",
 			"清理数据",
+			"设置策略 IP 白名单",
 			"初始化",
 			"退出",
 		})
@@ -90,8 +91,10 @@ func menu(cfg config.AdminConfig, ac *adminapi.Client) {
 		case 4:
 			runClean(ac, "", -1, false, false)
 		case 5:
-			runInit(&cfg, ac, "", "")
+			runPolicyIPMenu(ac)
 		case 6:
+			runInit(&cfg, ac, "", "")
+		case 7:
 			return
 		}
 	}
