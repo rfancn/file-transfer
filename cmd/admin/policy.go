@@ -12,6 +12,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/adminapi"
 	"github.com/rfancn/file-transfer/internal/cliui"
 	"github.com/rfancn/file-transfer/internal/iam"
+	"github.com/rfancn/file-transfer/internal/protocol"
 )
 
 var (
@@ -168,15 +169,119 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 		failf("选择语句失败: %v", err)
 		return
 	}
-	sid := sids[sidIdx]
-	value, err := cliui.Input("IP 或网段（逗号分隔，留空表示清除）", "", nil)
-	if canceledByUser(err) {
+	sid := strings.TrimSpace(sids[sidIdx])
+	policyName := names[idx]
+
+	for {
+		op, err := cliui.Select("选择操作", []string{
+			"查看当前 IP 白名单",
+			"添加 IP 或网段",
+			"移除 IP 或网段",
+			"覆盖设置",
+			"清空",
+			"返回",
+		})
+		if canceledByUser(err) {
+			return
+		}
+		if err != nil {
+			failf("选择操作失败: %v", err)
+			return
+		}
+		switch op {
+		case 0:
+			listPolicyIPs(ac, policyName, sid)
+		case 1:
+			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeAdd)
+		case 2:
+			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeRemove)
+		case 3:
+			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeSet)
+		case 4:
+			clearPolicyIPs(ac, policyName, sid)
+		case 5:
+			return
+		}
+	}
+}
+
+func listPolicyIPs(ac *adminapi.Client, policyName, sid string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cidrs, err := ac.GetStatementIPRanges(ctx, policyName, sid)
+	if err != nil {
+		failf("读取 IP 白名单失败: %v", err)
 		return
+	}
+	printPolicyIPs(protocol.SetStatementIPRangesResponse{Policy: policyName, Sid: sid, Cidrs: cidrs})
+}
+
+func promptIPs() ([]string, bool) {
+	value, err := cliui.Input("IP 或网段（逗号分隔）", "", nil)
+	if canceledByUser(err) {
+		return nil, false
 	}
 	if err != nil {
-		failf("读取网段失败: %v", err)
-		return
+		failf("读取 IP 或网段失败: %v", err)
+		return nil, false
 	}
 	cidrs := splitCIDRs([]string{value})
-	setPolicyIPs(ac, names[idx], strings.TrimSpace(sid), cidrs, len(cidrs) == 0, false)
+	if len(cidrs) == 0 {
+		fmt.Println("未输入 IP 或网段，已取消")
+		return nil, false
+	}
+	return cidrs, true
+}
+
+func changePolicyIPsMenu(ac *adminapi.Client, policyName, sid, mode string) {
+	cidrs, ok := promptIPs()
+	if !ok {
+		return
+	}
+	if err := validatePolicyIPArgs(policyName, sid, cidrs, false); err != nil {
+		failf("%v", err)
+		return
+	}
+	switch mode {
+	case iam.IPRangeAdd:
+		fmt.Printf("将向策略 %s 语句 %s 添加：%s\n", policyName, sid, strings.Join(cidrs, ", "))
+	case iam.IPRangeRemove:
+		fmt.Printf("将从策略 %s 语句 %s 移除：%s\n", policyName, sid, strings.Join(cidrs, ", "))
+	default:
+		fmt.Printf("将策略 %s 语句 %s 的 IP 白名单覆盖为：%s\n", policyName, sid, strings.Join(cidrs, ", "))
+	}
+	if !confirm("确认修改") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, mode)
+	if err != nil {
+		failf("修改 IP 白名单失败: %v", err)
+		return
+	}
+	printPolicyIPs(res)
+}
+
+func clearPolicyIPs(ac *adminapi.Client, policyName, sid string) {
+	fmt.Printf("将清空策略 %s 语句 %s 的 IP 白名单。\n", policyName, sid)
+	if !confirm("确认清空") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, nil, iam.IPRangeSet)
+	if err != nil {
+		failf("清空 IP 白名单失败: %v", err)
+		return
+	}
+	printPolicyIPs(res)
+}
+
+func printPolicyIPs(res protocol.SetStatementIPRangesResponse) {
+	if len(res.Cidrs) == 0 {
+		fmt.Printf("策略 %s 语句 %s 当前没有 IP 白名单\n", res.Policy, res.Sid)
+		return
+	}
+	fmt.Printf("策略 %s 语句 %s 当前 IP 白名单：%s\n", res.Policy, res.Sid, strings.Join(res.Cidrs, ", "))
 }

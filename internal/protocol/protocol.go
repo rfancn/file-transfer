@@ -88,6 +88,7 @@ type InitResponse struct {
 
 type SetStatementIPRangesRequest struct {
 	Cidrs *[]string `json:"cidrs"`
+	Mode  string    `json:"mode,omitempty"`
 }
 
 type SetStatementIPRangesResponse struct {

@@ -264,6 +264,24 @@ func (h *Handler) AdminListPolicySids(c *gin.Context) {
 	response.JSON(c, http.StatusOK, protocol.ListPolicySidsResponse{Policy: policyName, Sids: sids})
 }
 
+// AdminGetStatementIPRanges 返回指定策略语句当前的 IP 白名单。
+func (h *Handler) AdminGetStatementIPRanges(c *gin.Context) {
+	policyName := c.Param("name")
+	sid := c.Param("sid")
+	c.Set("audit_target", policyName+"/"+sid)
+	cidrs, err := h.IAM.StatementIPRanges(policyName, sid)
+	if err != nil {
+		logging.Error("admin get statement ip ranges", "policy", policyName, "sid", sid, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, protocol.SetStatementIPRangesResponse{
+		Policy: policyName,
+		Sid:    sid,
+		Cidrs:  cidrs,
+	})
+}
+
 // AdminSetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
 func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
@@ -280,7 +298,7 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 		SharedBucket: h.Cfg.S3.SharedBucket,
 		SharedDirs:   h.Cfg.S3.SharedDirs,
 	}
-	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, opts)
+	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, strings.TrimSpace(req.Mode), opts)
 	if err != nil {
 		logging.Error("admin set statement ip ranges", "policy", policyName, "sid", sid, "err", err)
 		writePolicyError(c, err)
@@ -313,6 +331,8 @@ func writePolicyError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, iam.ErrInvalidCIDR):
 		response.Err(c, http.StatusBadRequest, "invalid_cidr", err.Error())
+	case errors.Is(err, iam.ErrInvalidMode):
+		response.Err(c, http.StatusBadRequest, "invalid_mode", "mode 只允许 set、add 或 remove")
 	case errors.Is(err, iam.ErrServicePolicy):
 		response.Err(c, http.StatusForbidden, "service_policy", err.Error())
 	case errors.Is(err, iam.ErrUnsupportedPolicy):

@@ -138,7 +138,7 @@ func TestSetStatementIPRangesAppliesRenderedPolicy(t *testing.T) {
 	fake, adm := newFakeAdminServer(t, []byte(fakeOldPolicy))
 	m := &Manager{Admin: adm, PolicyDir: dir, Policies: policies}
 
-	normalized, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, opts)
+	normalized, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestSetStatementIPRangesApplyFailed(t *testing.T) {
 	fake.setFailAdd(true)
 	m := &Manager{Admin: adm, PolicyDir: dir, Policies: policies}
 
-	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, opts); !errors.Is(err, ErrApplyFailed) {
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, opts); !errors.Is(err, ErrApplyFailed) {
 		t.Fatalf("err = %v, want ErrApplyFailed", err)
 	}
 }

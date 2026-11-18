@@ -429,7 +429,7 @@ func TestRenderUpdatedPolicyRejects(t *testing.T) {
 
 func TestSetStatementIPRangesRejectsServicePolicy(t *testing.T) {
 	m := &Manager{}
-	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, PolicyOptions{})
+	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, PolicyOptions{})
 	if !errors.Is(err, ErrServicePolicy) {
 		t.Fatalf("err = %v", err)
 	}
@@ -503,7 +503,7 @@ func TestSetStatementIPRangesValidatesCIDRBeforeAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"bad"}, opts)
+	_, err = m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"bad"}, IPRangeSet, opts)
 	if !errors.Is(err, ErrInvalidCIDR) {
 		t.Fatalf("err = %v, want ErrInvalidCIDR", err)
 	}
@@ -552,5 +552,108 @@ func TestPolicySidsRejectsDuplicate(t *testing.T) {
 	m := &Manager{Policies: p}
 	if _, err := m.PolicySids(UserGroupPol); !errors.Is(err, ErrInvalidPolicy) {
 		t.Fatalf("err = %v, want ErrInvalidPolicy", err)
+	}
+}
+
+func TestStatementIPRanges(t *testing.T) {
+	doc := []byte(`{"Version":"2012-10-17","Statement":[` +
+		`{"Sid":"UploadWrite","Effect":"Allow","Condition":{"IpAddress":{"aws:SourceIp":["10.0.0.0/8","192.168.1.1"]}}},` +
+		`{"Sid":"DenyOne","Effect":"Deny"}]}`)
+	m := &Manager{Policies: &Policies{Group: doc}}
+
+	got, err := m.StatementIPRanges(UserGroupPol, "UploadWrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.0/8", "192.168.1.1/32"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got = %v, want %v", got, want)
+	}
+
+	if _, err := m.StatementIPRanges(UserGroupPol, "DenyOne"); !errors.Is(err, ErrStatementNotAllow) {
+		t.Fatalf("deny err = %v", err)
+	}
+	if _, err := m.StatementIPRanges(UserGroupPol, "Missing"); !errors.Is(err, ErrSIDNotFound) {
+		t.Fatalf("missing err = %v", err)
+	}
+	if _, err := m.StatementIPRanges(DataPolicy, "UploadWrite"); !errors.Is(err, ErrServicePolicy) {
+		t.Fatalf("service err = %v", err)
+	}
+}
+
+func TestApplyIPRangeMode(t *testing.T) {
+	current := []string{"10.0.0.0/8", "192.168.1.0/24"}
+	tests := []struct {
+		name    string
+		current []string
+		changes []string
+		mode    string
+		want    []string
+		wantErr bool
+	}{
+		{"set", current, []string{"172.16.0.0/12"}, IPRangeSet, []string{"172.16.0.0/12"}, false},
+		{"add", current, []string{"172.16.0.0/12", "10.0.0.0/8"}, IPRangeAdd, []string{"10.0.0.0/8", "192.168.1.0/24", "172.16.0.0/12"}, false},
+		{"remove", current, []string{"10.0.0.0/8"}, IPRangeRemove, []string{"192.168.1.0/24"}, false},
+		{"remove missing", current, []string{"172.16.0.0/12"}, IPRangeRemove, current, false},
+		{"invalid", current, nil, "bad", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := applyIPRangeMode(tt.current, tt.changes, tt.mode)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, ErrInvalidMode) {
+					t.Fatalf("err = %v, want ErrInvalidMode", err)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got = %v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestSetStatementIPRangesAddRemove(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDoc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
+	fake, adm := newFakeAdminServer(t, oldDoc)
+	m := &Manager{Admin: adm, Policies: policies, PolicyDir: dir}
+
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeSet, opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"192.168.1.0/24"}, IPRangeAdd, opts); err != nil {
+		t.Fatal(err)
+	}
+	assertStatementIPs(t, fake.lastAddedPolicy(t), "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"})
+
+	if _, err := m.SetStatementIPRanges(context.Background(), UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, IPRangeRemove, opts); err != nil {
+		t.Fatal(err)
+	}
+	assertStatementIPs(t, fake.lastAddedPolicy(t), "UploadWrite", []string{"192.168.1.0/24"})
+}
+
+func assertStatementIPs(t *testing.T, policy []byte, sid string, want []string) {
+	t.Helper()
+	got := sourceIPs(t, parseStatements(t, policy)[sid])
+	if len(got) != len(want) {
+		t.Fatalf("aws:SourceIp = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("aws:SourceIp = %v, want %v", got, want)
+		}
 	}
 }

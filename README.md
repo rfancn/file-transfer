@@ -305,12 +305,25 @@ Content-Type: application/json
 { "cidrs": ["10.0.0.0/8", "192.168.1.0/24"] }
 ```
 
+`mode` 可选：`set`（默认，覆盖现有列表）、`add`（追加）、`remove`（移除）。例如：
+
+```json
+{ "cidrs": ["10.0.0.1"], "mode": "add" }
+```
+
 `cidrs` 必须显式提供，缺失返回 `invalid_request`；支持单个 IPv4/IPv6 地址或 CIDR 网段（例如 `10.0.0.1`、`10.0.0.0/8`、`2001:db8::1`），单 IP 规范化为 /32（IPv4）或 /128（IPv6），最多 100 条，服务端会自动去重；只支持 `Allow` 语句。
 
-成功响应：
+成功响应（返回修改后的完整列表）：
 
 ```json
 { "policy": "ft-user-policy", "sid": "UploadWrite", "cidrs": ["10.0.0.0/8"] }
+```
+
+读取当前 IP 白名单：
+
+```http
+GET /v1/admin/policies/:name/statements/:sid/ip-ranges
+Authorization: Bearer <admin token>
 ```
 
 读取 Sid 列表（`ft-admin` 菜单使用）：
@@ -332,6 +345,7 @@ Authorization: Bearer <admin token>
 |---|---|---|
 | 400 | `invalid_request` | 请求体非法或缺少 `cidrs` |
 | 400 | `invalid_cidr` | IP/网段格式非法 |
+| 400 | `invalid_mode` | `mode` 不是 set/add/remove |
 | 400 | `unsupported_policy` | 策略不在允许范围 |
 | 403 | `service_policy` | 不允许修改服务身份策略 |
 | 400 | `sid_not_found` | 策略中不存在该 Sid（模板可能缺少 Sid，需先合并新模板） |
@@ -368,7 +382,7 @@ ft-admin policy ip ft-user-policy UploadWrite --clear
 - 非交互执行时必须提供网段或 `--clear`；
 - 单个位置参数可用逗号分隔多个网段；
 - `--yes` 跳过确认；
-- 交互菜单会先读取该策略的 Sid 列表，再用菜单选择要设置的语句。
+- 交互菜单会先读取该策略的 Sid 列表，选择语句后进入操作菜单：查看当前白名单、添加、移除、覆盖设置、清空，可重复操作直到返回。
 
 常用 Sid：
 

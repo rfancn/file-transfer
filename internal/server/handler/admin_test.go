@@ -95,6 +95,7 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 		{"invalid cidr", "ft-user-policy", "UploadWrite", `{"cidrs":["bad"]}`, http.StatusBadRequest, "invalid_cidr"},
 		{"service policy", "ft-admin-policy", "UploadWrite", `{"cidrs":["10.0.0.0/8"]}`, http.StatusForbidden, "service_policy"},
 		{"unsupported policy", "custom-policy", "UploadWrite", `{"cidrs":["10.0.0.0/8"]}`, http.StatusBadRequest, "unsupported_policy"},
+		{"invalid mode", "ft-user-policy", "UploadWrite", `{"cidrs":["10.0.0.0/8"],"mode":"bad"}`, http.StatusBadRequest, "invalid_mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,6 +118,32 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 				t.Fatalf("body = %s", w.Body.String())
 			}
 		})
+	}
+}
+
+func TestAdminGetStatementIPRanges(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	doc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Condition":{"IpAddress":{"aws:SourceIp":["10.0.0.0/8"]}}}]}`)
+	h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{Group: doc}}}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges", nil)
+	c.Params = gin.Params{
+		{Key: "name", Value: iam.UserGroupPol},
+		{Key: "sid", Value: "UploadWrite"},
+	}
+
+	h.AdminGetStatementIPRanges(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var out protocol.SetStatementIPRangesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Cidrs) != 1 || out.Cidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("out = %+v", out)
 	}
 }
 

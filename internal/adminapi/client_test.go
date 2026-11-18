@@ -353,6 +353,64 @@ func TestListPolicySids(t *testing.T) {
 	}
 }
 
+func TestGetStatementIPRanges(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{
+			Policy: "ft-user-policy",
+			Sid:    "UploadWrite",
+			Cidrs:  []string{"10.0.0.0/8"},
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	cidrs, err := c.GetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges" || gotAuth != "Bearer admin-token" {
+		t.Fatalf("method=%q path=%q auth=%q", gotMethod, gotPath, gotAuth)
+	}
+	if len(cidrs) != 1 || cidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs = %v", cidrs)
+	}
+}
+
+func TestChangeStatementIPRangesMode(t *testing.T) {
+	var gotMode string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetStatementIPRangesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		gotMode = req.Mode
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{Policy: "ft-user-policy", Sid: "UploadWrite"})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8"}, "add"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMode != "add" {
+		t.Fatalf("mode = %q", gotMode)
+	}
+}
+
 func TestUnauthorizedError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

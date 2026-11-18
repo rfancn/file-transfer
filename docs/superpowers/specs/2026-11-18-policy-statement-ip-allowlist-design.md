@@ -47,7 +47,8 @@ Content-Type: application/json
 ```
 
 - `cidrs` 字段必须显式提供；
-- `cidrs: []` 表示清除该语句的 IP 条件；
+- `mode` 可选：`set`（默认，覆盖）、`add`（追加）、`remove`（移除）；
+- `cidrs: []` 配合 `set` 表示清除该语句的 IP 条件；
 - 每个值可以是单个 IP 或 CIDR 网段；单个 IPv4 规范化为 /32，IPv6 规范化为 /128，
   网段清零主机位（`10.0.0.1/8` → `10.0.0.0/8`），自动去重，最多 100 条；空字符串会被拒绝。
 
@@ -63,6 +64,7 @@ Content-Type: application/json
 |---|---|---|
 | 请求体非法、`cidrs` 缺失 | 400 | `invalid_request` |
 | IP/CIDR 格式非法 | 400 | `invalid_cidr` |
+| `mode` 不是 set/add/remove | 400 | `invalid_mode` |
 | 策略不在允许范围 | 400 | `unsupported_policy` |
 | 目标是 `ft-data-policy` / `ft-admin-policy` | 403 | `service_policy` |
 | 策略中不存在该 Sid | 400 | `sid_not_found` |
@@ -82,6 +84,14 @@ Content-Type: application/json
 
 ```json
 { "policy": "ft-user-policy", "sids": ["HomeBucketMetadata", "ListOwnDirs", "UploadWrite"] }
+```
+
+### 3.5 当前 IP 列表
+
+`GET /v1/admin/policies/:name/statements/:sid/ip-ranges` 返回该语句当前的 `aws:SourceIp` 列表：
+
+```json
+{ "policy": "ft-user-policy", "sid": "UploadWrite", "cidrs": ["10.0.0.0/8"] }
 ```
 
 ## 4. 策略条件语义
@@ -161,18 +171,20 @@ Content-Type: application/json
     `ErrInvalidCIDR`、`ErrInvalidPolicy`、`ErrPolicyWrite` 哨兵错误。
 - `iam.go`
   - `Manager` 增加 `PolicyDir string` 字段；
-  - 新增 `SetStatementIPRanges(ctx, policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, error)`：
-    1. 校验策略名并规范化 CIDR；
+  - 新增 `SetStatementIPRanges(ctx, policyName, sid string, cidrs []string, mode string, opts PolicyOptions) ([]string, error)`：
+    1. 校验策略名、`mode` 并规范化 IP/网段；`mode` 为空时按 `set` 处理；
     2. 获取包级 `policyWriteMu`（与 `ReplacePolicy` 共享），串行化所有策略写操作；
     3. 先找出绑定该策略的用户和组（`ListUsers` + `ListGroups`/`GetGroupDescription`），
        支持逗号分隔的多策略字段；组描述读取失败直接返回错误，不静默跳过；
-    4. 读取模板文件，调用 `SetStatementSourceIP`；
-    5. 用 `PolicyOptions` 渲染并校验 JSON；
-    6. 原子写回模板文件（同目录临时文件 + `rename`，保留原权限）；
-    7. 更新内存中的渲染结果（见 6.2）；
-    8. 用脱离请求取消的 30 秒上下文调用内部 `replacePolicy` 立即下发；
+    4. `add`/`remove` 时先通过 `StatementIPRanges` 读取当前列表，计算最终列表；
+    5. 读取模板文件，调用 `SetStatementSourceIP`；
+    6. 用 `PolicyOptions` 渲染并校验 JSON；
+    7. 原子写回模板文件（同目录临时文件 + `rename`，保留原权限）；
+    8. 更新内存中的渲染结果（见 6.2）；
+    9. 用脱离请求取消的 30 秒上下文调用内部 `replacePolicy` 立即下发；
        失败返回 `ErrApplyFailed`，表示规则已持久化但未下发；
-    9. 返回规范化后的 CIDR 列表。
+    10. 返回修改后的完整列表。
+  - 新增 `StatementIPRanges(policyName, sid string) ([]string, error)`：从内存策略文档读取指定 Allow 语句的 `aws:SourceIp`，用于查看和 `add`/`remove` 计算。
   - `ReplacePolicy` 改为获取 `policyWriteMu` 后调用内部 `replacePolicy`，
     保证用户注册、`ft-admin init` 与本接口不会并发交叉写同一策略。
   - 下发的策略内容取自已修改模板的渲染结果，因此会同时补上模板中的 Sid；旧的、无 Sid 的线上策略
@@ -232,11 +244,11 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
 
 ### 7.2 菜单
 
-主菜单新增“设置策略 IP 白名单”，依次提示策略（三个组策略选择）、从 `GET /sids` 读取的 Sid 菜单、网段。
+主菜单新增“设置策略 IP 白名单”，依次选择策略（三个组策略）、从 `GET /sids` 读取的 Sid，然后进入操作菜单：查看当前白名单、添加、移除、覆盖设置、清空、返回；可对同一语句重复操作。
 
 ### 7.3 客户端
 
-- `internal/adminapi/client.go`：新增 `SetStatementIPRanges(ctx, policy, sid string, cidrs []string)`；
+- `internal/adminapi/client.go`：新增 `SetStatementIPRanges`、`ChangeStatementIPRanges`（支持 mode）和 `GetStatementIPRanges`；
 - 服务端错误沿用 `APIError` 展示。
 
 ## 8. 部署与文档
@@ -254,6 +266,7 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
 - `internal/iam`：
   - `SetStatementSourceIP` 表驱动测试：新增、替换、清除、保留其他条件、Deny 拒绝、Sid 不存在、Sid 重复、非法 JSON；
   - `NormalizeCIDRs`：单 IP 与网段、IPv4/IPv6、非法值、去重、空列表；
+  - `StatementIPRanges`、`applyIPRangeMode` 及 set/add/remove 全链路测试；
   - 三个模板的 Sid 唯一性及关键 Sid 存在性。
 - `internal/server/handler`：缺字段、非法 CIDR、非法策略、服务策略拒绝。
 - `internal/server/router`：新路由未认证返回 401。

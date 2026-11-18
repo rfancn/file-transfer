@@ -216,14 +216,19 @@ func (c *Client) ListPolicySids(ctx context.Context, policyName string) ([]strin
 	return out.Sids, nil
 }
 
-// SetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
+// SetStatementIPRanges 覆盖设置指定策略语句的 IP 白名单。
 func (c *Client) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string) (protocol.SetStatementIPRangesResponse, error) {
+	return c.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, "")
+}
+
+// ChangeStatementIPRanges 按 set/add/remove 模式修改指定策略语句的 IP 白名单。
+func (c *Client) ChangeStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string) (protocol.SetStatementIPRangesResponse, error) {
 	var out protocol.SetStatementIPRangesResponse
 	values := cidrs
 	if values == nil {
 		values = []string{}
 	}
-	payload, err := json.Marshal(protocol.SetStatementIPRangesRequest{Cidrs: &values})
+	payload, err := json.Marshal(protocol.SetStatementIPRangesRequest{Cidrs: &values, Mode: mode})
 	if err != nil {
 		return out, err
 	}
@@ -239,6 +244,22 @@ func (c *Client) SetStatementIPRanges(ctx context.Context, policyName, sid strin
 		return out, err
 	}
 	return out, nil
+}
+
+// GetStatementIPRanges 返回指定策略语句当前的 IP 白名单。
+func (c *Client) GetStatementIPRanges(ctx context.Context, policyName, sid string) ([]string, error) {
+	var out protocol.SetStatementIPRangesResponse
+	u := c.baseURL + "/v1/admin/policies/" + url.PathEscape(policyName) +
+		"/statements/" + url.PathEscape(sid) + "/ip-ranges"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return out.Cidrs, nil
 }
 
 func (c *Client) do(req *http.Request) error {

@@ -14,7 +14,13 @@ import (
 	"github.com/minio/madmin-go/v3"
 )
 
-const maxCIDRs = 100
+const (
+	maxCIDRs = 100
+
+	IPRangeSet    = "set"
+	IPRangeAdd    = "add"
+	IPRangeRemove = "remove"
+)
 
 var (
 	ErrUnsupportedPolicy = errors.New("策略不支持此操作")
@@ -23,6 +29,7 @@ var (
 	ErrStatementNotAllow = errors.New("指定 Sid 不是 Allow 语句")
 	ErrInvalidCIDR       = errors.New("无效的 IP 或网段")
 	ErrInvalidPolicy     = errors.New("策略内容无效")
+	ErrInvalidMode       = errors.New("无效的 IP 白名单操作")
 	ErrPolicyRead        = errors.New("读取策略文件失败")
 	ErrPolicyWrite       = errors.New("写入策略文件失败")
 	ErrApplyFailed       = errors.New("策略已持久化但下发 RustFS 失败")
@@ -142,19 +149,33 @@ func normalizeSourceIP(value string) (string, error) {
 // cidrs 必须已经过 NormalizeCIDRs 规范化；为空时清除条件。
 // 写回会重新序列化整篇策略（键按字母排序、两空格缩进）。
 func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, error) {
-	if sid == "" {
-		return nil, ErrSIDNotFound
-	}
 	var doc map[string]any
 	if err := json.Unmarshal(policy, &doc); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	target, err := findAllowStatement(doc, sid)
+	if err != nil {
+		return nil, err
+	}
+	if err := setSourceIPCondition(target, cidrs); err != nil {
+		return nil, err
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	return append(out, '\n'), nil
+}
+
+// findAllowStatement 定位 Sid 唯一匹配的 Allow 语句。
+func findAllowStatement(doc map[string]any, sid string) (map[string]any, error) {
+	if sid == "" {
+		return nil, ErrSIDNotFound
 	}
 	rawStatements, ok := doc["Statement"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("%w: Statement 必须是数组", ErrInvalidPolicy)
 	}
-
-	// 第一遍：定位并校验唯一匹配，避免先改写再报错。
 	var target map[string]any
 	for i, raw := range rawStatements {
 		statement, ok := raw.(map[string]any)
@@ -184,19 +205,102 @@ func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, er
 	if effect != "Allow" {
 		return nil, fmt.Errorf("%w: %q", ErrStatementNotAllow, sid)
 	}
-	if err := setSourceIPCondition(target, cidrs); err != nil {
+	return target, nil
+}
+
+// StatementIPRanges 返回指定策略语句当前的 aws:SourceIp 列表。
+func (m *Manager) StatementIPRanges(policyName, sid string) ([]string, error) {
+	if IsServicePolicy(policyName) {
+		return nil, ErrServicePolicy
+	}
+	if !IsEditablePolicy(policyName) {
+		return nil, ErrUnsupportedPolicy
+	}
+	if m.Policies == nil {
+		return nil, ErrPolicyRead
+	}
+	doc, err := m.Policies.Document(policyName)
+	if err != nil {
 		return nil, err
 	}
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
+	var parsed map[string]any
+	if err := json.Unmarshal(doc, &parsed); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
 	}
-	return append(out, '\n'), nil
+	target, err := findAllowStatement(parsed, sid)
+	if err != nil {
+		return nil, err
+	}
+	condition, _ := target["Condition"].(map[string]any)
+	ipAddress, _ := condition["IpAddress"].(map[string]any)
+	rawIPs, ok := ipAddress["aws:SourceIp"]
+	if !ok || rawIPs == nil {
+		return []string{}, nil
+	}
+	values, ok := rawIPs.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: aws:SourceIp 必须是数组", ErrInvalidPolicy)
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: aws:SourceIp 值必须是字符串", ErrInvalidPolicy)
+		}
+		out = append(out, s)
+	}
+	return NormalizeCIDRs(out)
+}
+
+// applyIPRangeMode 根据 set/add/remove 计算最终列表。
+func applyIPRangeMode(current, changes []string, mode string) ([]string, error) {
+	switch mode {
+	case IPRangeSet:
+		return changes, nil
+	case IPRangeAdd:
+		seen := make(map[string]struct{}, len(current)+len(changes))
+		out := make([]string, 0, len(current)+len(changes))
+		for _, v := range current {
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+		for _, v := range changes {
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+		return out, nil
+	case IPRangeRemove:
+		remove := make(map[string]struct{}, len(changes))
+		for _, v := range changes {
+			remove[v] = struct{}{}
+		}
+		out := make([]string, 0, len(current))
+		for _, v := range current {
+			if _, ok := remove[v]; ok {
+				continue
+			}
+			out = append(out, v)
+		}
+		return out, nil
+	default:
+		return nil, ErrInvalidMode
+	}
 }
 
 // SetStatementIPRanges 修改指定策略模板中的语句并立即下发到 RustFS。
 // 所有策略写操作共享 policyWriteMu（定义在 iam.go）。
-func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, error) {
+func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string, opts PolicyOptions) ([]string, error) {
+	if mode == "" {
+		mode = IPRangeSet
+	}
+	switch mode {
+	case IPRangeSet, IPRangeAdd, IPRangeRemove:
+	default:
+		return nil, ErrInvalidMode
+	}
 	if IsServicePolicy(policyName) {
 		return nil, ErrServicePolicy
 	}
@@ -219,7 +323,19 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 		return nil, err
 	}
 
-	_, rendered, err := m.renderUpdatedPolicy(policyName, sid, normalized, opts)
+	final := normalized
+	if mode != IPRangeSet {
+		current, err := m.StatementIPRanges(policyName, sid)
+		if err != nil {
+			return nil, err
+		}
+		final, err = applyIPRangeMode(current, normalized, mode)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	applied, rendered, err := m.renderUpdatedPolicy(policyName, sid, final, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +346,7 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	if err := m.replacePolicy(applyCtx, policyName, rendered, users, groups); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrApplyFailed, err)
 	}
-	return normalized, nil
+	return applied, nil
 }
 
 // renderUpdatedPolicy 修改模板、原子写回并更新内存文档。

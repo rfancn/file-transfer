@@ -28,6 +28,7 @@ var auditActions = map[string]string{
 	"DELETE /v1/admin/users/:username":                       "admin.user.delete",
 	"DELETE /v1/admin/data/:dir":                             "admin.data.clean",
 	"GET /v1/admin/policies/:name/sids":                      "admin.policy.sids",
+	"GET /v1/admin/policies/:name/statements/:sid/ip-ranges": "admin.policy.ip.list",
 	"PUT /v1/admin/policies/:name/statements/:sid/ip-ranges": "admin.policy.ip.set",
 }
 
