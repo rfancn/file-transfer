@@ -1,6 +1,7 @@
 {
   "Statement": [
     {
+      "Sid": "HomeBucketMetadata",
       "Action": [
         "s3:HeadBucket",
         "s3:GetBucketLocation",
@@ -16,6 +17,7 @@
       ]
     },
     {
+      "Sid": "ListOwnDirs",
       "Action": [
         "s3:ListBucket"
       ],
@@ -42,6 +44,7 @@
       ]
     },
     {
+      "Sid": "UploadWrite",
       "Action": [
         "s3:PutObject",
         "s3:AbortMultipartUpload",
@@ -56,6 +59,7 @@
       ]
     },
     {
+      "Sid": "UploadMarkerProtect",
       "Action": [
         "s3:DeleteObject",
         "s3:DeleteObjectVersion"
@@ -67,6 +71,7 @@
       ]
     },
     {
+      "Sid": "SharedBucketMetadata",
       "Action": [
         "s3:HeadBucket",
         "s3:GetBucketLocation"
@@ -77,6 +82,7 @@
       ]
     },
     {
+      "Sid": "SharedRootList",
       "Action": [
         "s3:ListBucket"
       ],
@@ -97,6 +103,7 @@
       ]
     },
     {
+      "Sid": "SharedDirList",
       "Action": [
         "s3:ListBucket"
       ],
@@ -113,6 +120,7 @@
       ]
     },
     {
+      "Sid": "SharedRead",
       "Action": [
         "s3:GetObject",
         "s3:GetObjectAttributes",

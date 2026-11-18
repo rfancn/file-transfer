@@ -508,3 +508,49 @@ func TestUserPolicyName(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestPolicyTemplateSIDs(t *testing.T) {
+	expected := map[string][]string{
+		policyUserGroupFile: {
+			"HomeBucketMetadata", "ListOwnDirs", "UploadWrite", "UploadMarkerProtect",
+			"SharedBucketMetadata", "SharedRootList", "SharedDirList", "SharedRead",
+		},
+		policyOperatorFile: {
+			"ListAllBuckets", "HomeBucketMetadata", "ListRootDirs", "ListInboundRecursive",
+			"UploadDirDeny", "OutsideInboundDeny", "InboundWrite", "InboundMarkerProtect", "OutboundRead",
+		},
+		policySharedOperatorFile: {
+			"SharedBucketMetadata", "SharedBucketList", "SharedMultipart",
+			"SharedRead", "SharedWrite", "SharedMarkerProtect", "SharedBucketDeleteDeny",
+		},
+	}
+	for file, want := range expected {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "policy", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Statement []struct {
+				Sid string `json:"Sid"`
+			} `json:"Statement"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		seen := map[string]bool{}
+		for i, st := range doc.Statement {
+			if st.Sid == "" {
+				t.Fatalf("%s 第 %d 条语句缺少 Sid", file, i+1)
+			}
+			if seen[st.Sid] {
+				t.Fatalf("%s Sid 重复: %s", file, st.Sid)
+			}
+			seen[st.Sid] = true
+		}
+		for _, sid := range want {
+			if !seen[sid] {
+				t.Fatalf("%s 缺少 Sid %s", file, sid)
+			}
+		}
+	}
+}
