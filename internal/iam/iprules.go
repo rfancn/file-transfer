@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,6 +224,11 @@ func (m *Manager) StatementIPRanges(policyName, sid string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return statementIPRanges(doc, sid)
+}
+
+// statementIPRanges 从已读取的策略文档中解析指定语句的 aws:SourceIp 列表。
+func statementIPRanges(doc []byte, sid string) ([]string, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal(doc, &parsed); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
@@ -312,12 +318,12 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	if err != nil {
 		return nil, err
 	}
-	def, _, err := m.editableDocument(policyName)
+	def, doc, err := m.editableDocument(policyName)
 	if err != nil {
 		return nil, err
 	}
 	// 先做内存校验，非法策略/Sid 不发起 RustFS RPC。
-	if _, err := m.StatementIPRanges(policyName, sid); err != nil {
+	if _, err := statementIPRanges(doc, sid); err != nil {
 		return nil, err
 	}
 
@@ -481,19 +487,10 @@ func policyEntitiesFor(entities madmin.PolicyEntitiesResult, policyName, boundGr
 	if !found {
 		return nil, nil, false
 	}
-	if !containsString(groups, boundGroup) {
+	if !slices.Contains(groups, boundGroup) {
 		groups = append(groups, boundGroup)
 	}
 	return users, groups, true
-}
-
-func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 // writeFileAtomic 先写同目录临时文件再 rename，避免中途失败留下半个文件。

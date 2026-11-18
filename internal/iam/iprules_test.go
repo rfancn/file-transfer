@@ -111,28 +111,20 @@ func TestEditablePolicyHelpers(t *testing.T) {
 	}
 }
 
-type parsedStatement struct {
-	Sid       string                    `json:"Sid"`
-	Effect    string                    `json:"Effect"`
-	Condition map[string]map[string]any `json:"Condition"`
-}
-
-func parseStatements(t *testing.T, raw []byte) map[string]parsedStatement {
+func parseStatements(t *testing.T, raw []byte) map[string]policyStatement {
 	t.Helper()
-	var doc struct {
-		Statement []parsedStatement `json:"Statement"`
-	}
+	var doc policyDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	out := map[string]parsedStatement{}
+	out := map[string]policyStatement{}
 	for _, st := range doc.Statement {
 		out[st.Sid] = st
 	}
 	return out
 }
 
-func sourceIPs(t *testing.T, st parsedStatement) []string {
+func sourceIPs(t *testing.T, st policyStatement) []string {
 	t.Helper()
 	ipAddress := st.Condition["IpAddress"]
 	if ipAddress == nil {

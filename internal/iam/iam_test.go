@@ -10,14 +10,18 @@ import (
 	"testing"
 )
 
+// policyStatement 是测试断言策略 JSON 时使用的通用语句结构。
+type policyStatement struct {
+	Sid       string
+	Effect    string
+	Action    []string
+	Resource  []string
+	Condition map[string]map[string]any
+}
+
 // policyDoc 是测试断言策略 JSON 时使用的通用结构。
 type policyDoc struct {
-	Statement []struct {
-		Effect    string
-		Action    []string
-		Resource  []string
-		Condition map[string]map[string]any
-	}
+	Statement []policyStatement
 }
 
 func loadTestPolicies(t *testing.T) *Policies {
@@ -603,11 +607,7 @@ func TestPolicyTemplateSIDs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var doc struct {
-			Statement []struct {
-				Sid string `json:"Sid"`
-			} `json:"Statement"`
-		}
+		var doc policyDoc
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			t.Fatalf("%s: %v", file, err)
 		}

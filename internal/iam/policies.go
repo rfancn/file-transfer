@@ -71,20 +71,29 @@ type Policies struct {
 	Admin          []byte
 }
 
+// documentField 返回策略名对应的文档字段；调用方需持有 mu。
+func (p *Policies) documentField(name string) (*[]byte, error) {
+	switch name {
+	case UserGroupPol:
+		return &p.Group, nil
+	case AdminGroupPol:
+		return &p.Operator, nil
+	case SharedAdminPol:
+		return &p.SharedOperator, nil
+	default:
+		return nil, ErrUnsupportedPolicy
+	}
+}
+
 // Document 返回指定组策略当前的渲染文档副本。
 func (p *Policies) Document(name string) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	switch name {
-	case UserGroupPol:
-		return bytes.Clone(p.Group), nil
-	case AdminGroupPol:
-		return bytes.Clone(p.Operator), nil
-	case SharedAdminPol:
-		return bytes.Clone(p.SharedOperator), nil
-	default:
-		return nil, ErrUnsupportedPolicy
+	field, err := p.documentField(name)
+	if err != nil {
+		return nil, err
 	}
+	return bytes.Clone(*field), nil
 }
 
 // SetDocument 更新指定组策略的渲染文档。
@@ -92,16 +101,11 @@ func (p *Policies) Document(name string) ([]byte, error) {
 func (p *Policies) SetDocument(name string, doc []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	switch name {
-	case UserGroupPol:
-		p.Group = bytes.Clone(doc)
-	case AdminGroupPol:
-		p.Operator = bytes.Clone(doc)
-	case SharedAdminPol:
-		p.SharedOperator = bytes.Clone(doc)
-	default:
-		return ErrUnsupportedPolicy
+	field, err := p.documentField(name)
+	if err != nil {
+		return err
 	}
+	*field = bytes.Clone(doc)
 	return nil
 }
 

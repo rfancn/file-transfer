@@ -93,15 +93,15 @@ func setPolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string, c
 			failf("请提供至少一个网段，或使用 --clear 清除")
 			return
 		}
-		value, err := cliui.Input("IP 或网段（逗号分隔，留空表示清除）", "", nil)
+		var err error
+		cidrs, err = readCIDRs("IP 或网段（逗号分隔，留空表示清除）")
 		if canceledByUser(err) {
 			return
 		}
 		if err != nil {
-			failf("读取网段失败: %v", err)
+			failf("读取 IP 或网段失败: %v", err)
 			return
 		}
-		cidrs = splitCIDRs([]string{value})
 		clear = len(cidrs) == 0
 	}
 	if clear {
@@ -147,9 +147,6 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 	}
 	if err != nil {
 		failf("选择策略失败: %v", err)
-		return
-	}
-	if idx < 0 || idx >= len(names) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -210,30 +207,16 @@ func runPolicyIPOperations(ac *adminapi.Client, policyName, sid string) {
 	}
 }
 
-type policyIPAction struct {
-	kind string
-	cidr string
-}
-
-const (
-	ipActionEntry  = "entry"
-	ipActionDelete = "delete"
-	ipActionAdd    = "add"
-	ipActionReturn = "return"
-)
-
 // runPolicyIPWhitelist 直接展示当前 IP 白名单并用多选列表操作。
 func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
+	cidrs, err := fetchPolicyIPs(ac, policyName, sid)
+	if err != nil {
+		failf("读取 IP 白名单失败: %v", err)
+		return
+	}
 	checked := map[string]bool{}
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cidrs, err := ac.GetStatementIPRanges(ctx, policyName, sid)
-		cancel()
-		if err != nil {
-			failf("读取 IP 白名单失败: %v", err)
-			return
-		}
-		items, actions := buildPolicyIPItems(cidrs, checked)
+		items := buildPolicyIPItems(cidrs, checked)
 		label := fmt.Sprintf("策略 %s 语句 %s 的 IP 白名单", policyName, sid)
 		if len(cidrs) == 0 {
 			label += "（当前为空）"
@@ -246,70 +229,70 @@ func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
 			failf("选择操作失败: %v", err)
 			return
 		}
-		for i, action := range actions {
-			if action.kind == ipActionEntry && items[i].Touched {
-				checked[action.cidr] = items[i].Checked
+		for i := range cidrs {
+			if items[i].Touched {
+				checked[items[i].Text] = items[i].Checked
 			}
 		}
-		switch actions[idx].kind {
-		case ipActionEntry:
+		if idx < len(cidrs) {
+			// 在条目行回车只刷新本地显示，不重复请求服务端。
 			continue
-		case ipActionDelete:
-			selected := checkedIPs(items, actions)
+		}
+		switch idx - len(cidrs) {
+		case 0: // 删除选中项
+			selected := checkedIPs(items, cidrs)
 			if len(selected) == 0 {
 				fmt.Println("未选择任何 IP 或网段")
 				continue
 			}
-			if removePolicyIPs(ac, policyName, sid, selected) {
-				checked = map[string]bool{}
+			if !removePolicyIPs(ac, policyName, sid, selected) {
+				continue
 			}
-		case ipActionAdd:
-			if addPolicyIPsMenu(ac, policyName, sid) {
-				checked = map[string]bool{}
+			checked = map[string]bool{}
+			if cidrs, err = fetchPolicyIPs(ac, policyName, sid); err != nil {
+				failf("读取 IP 白名单失败: %v", err)
+				return
 			}
-		case ipActionReturn:
+		case 1: // 添加 IP 或网段
+			if !addPolicyIPsMenu(ac, policyName, sid) {
+				continue
+			}
+			checked = map[string]bool{}
+			if cidrs, err = fetchPolicyIPs(ac, policyName, sid); err != nil {
+				failf("读取 IP 白名单失败: %v", err)
+				return
+			}
+		default: // 返回
 			return
 		}
 	}
 }
 
-// buildPolicyIPItems 把当前 IP 白名单和操作项转为多选列表。
-func buildPolicyIPItems(cidrs []string, checked map[string]bool) ([]cliui.MultiItem, []policyIPAction) {
+// buildPolicyIPItems 把当前 IP 白名单和固定操作项转为多选列表。
+func buildPolicyIPItems(cidrs []string, checked map[string]bool) []cliui.MultiItem {
 	items := make([]cliui.MultiItem, 0, len(cidrs)+3)
-	actions := make([]policyIPAction, 0, len(cidrs)+3)
 	for _, cidr := range cidrs {
 		items = append(items, cliui.MultiItem{Text: cidr, Selectable: true, Checked: checked[cidr]})
-		actions = append(actions, policyIPAction{kind: ipActionEntry, cidr: cidr})
 	}
-	for _, action := range []struct {
-		text string
-		kind string
-	}{
-		{"[删除选中项]", ipActionDelete},
-		{"[添加 IP 或网段]", ipActionAdd},
-		{"[返回]", ipActionReturn},
-	} {
-		items = append(items, cliui.MultiItem{Text: action.text})
-		actions = append(actions, policyIPAction{kind: action.kind})
-	}
-	return items, actions
+	return append(items,
+		cliui.MultiItem{Text: "[删除选中项]"},
+		cliui.MultiItem{Text: "[添加 IP 或网段]"},
+		cliui.MultiItem{Text: "[返回]"})
 }
 
 // checkedIPs 返回当前勾选的 IP 或网段。
-func checkedIPs(items []cliui.MultiItem, actions []policyIPAction) []string {
-	out := make([]string, 0, len(items))
-	for i, action := range actions {
-		if action.kind == ipActionEntry && items[i].Checked {
-			out = append(out, action.cidr)
+func checkedIPs(items []cliui.MultiItem, cidrs []string) []string {
+	out := make([]string, 0, len(cidrs))
+	for i := range cidrs {
+		if items[i].Checked {
+			out = append(out, items[i].Text)
 		}
 	}
 	return out
 }
 
 func listPolicyIPs(ac *adminapi.Client, policyName, sid string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cidrs, err := ac.GetStatementIPRanges(ctx, policyName, sid)
+	cidrs, err := fetchPolicyIPs(ac, policyName, sid)
 	if err != nil {
 		failf("读取 IP 白名单失败: %v", err)
 		return
@@ -317,8 +300,24 @@ func listPolicyIPs(ac *adminapi.Client, policyName, sid string) {
 	printPolicyIPs(protocol.SetStatementIPRangesResponse{Policy: policyName, Sid: sid, Cidrs: cidrs})
 }
 
+// fetchPolicyIPs 拉取指定策略语句当前的 IP 白名单。
+func fetchPolicyIPs(ac *adminapi.Client, policyName, sid string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return ac.GetStatementIPRanges(ctx, policyName, sid)
+}
+
+// readCIDRs 读取逗号分隔的 IP 或网段；空输入返回空切片。
+func readCIDRs(label string) ([]string, error) {
+	value, err := cliui.Input(label, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	return splitCIDRs([]string{value}), nil
+}
+
 func promptIPs() ([]string, bool) {
-	value, err := cliui.Input("IP 或网段（逗号分隔）", "", nil)
+	cidrs, err := readCIDRs("IP 或网段（逗号分隔）")
 	if canceledByUser(err) {
 		return nil, false
 	}
@@ -326,7 +325,6 @@ func promptIPs() ([]string, bool) {
 		failf("读取 IP 或网段失败: %v", err)
 		return nil, false
 	}
-	cidrs := splitCIDRs([]string{value})
 	if len(cidrs) == 0 {
 		fmt.Println("未输入 IP 或网段，已取消")
 		return nil, false

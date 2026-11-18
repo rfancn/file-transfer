@@ -116,7 +116,7 @@ func TestAuditLogsActorActionTarget(t *testing.T) {
 	r.Use(Audit())
 	r.PUT("/v1/files/*path", func(c *gin.Context) {
 		c.Set("username", "alice")
-		c.Set("audit_target", "outbound/a.txt")
+		c.Set(ContextAuditTarget, "outbound/a.txt")
 		c.Status(http.StatusOK)
 	})
 

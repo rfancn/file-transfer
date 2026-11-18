@@ -75,6 +75,10 @@ func TestAdminAddUserRejects(t *testing.T) {
 	}
 }
 
+func newPolicyTestHandler(doc []byte) *Handler {
+	return &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{Group: doc}}}}
+}
+
 func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {
@@ -99,9 +103,7 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{
-				Group: []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow"}]}`),
-			}}}}
+			h := newPolicyTestHandler([]byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow"}]}`))
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest(http.MethodPut, "/v1/admin/policies/x/statements/y/ip-ranges", strings.NewReader(tt.body))
@@ -126,7 +128,7 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 func TestAdminGetStatementIPRanges(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	doc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Condition":{"IpAddress":{"aws:SourceIp":["10.0.0.0/8"]}}}]}`)
-	h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{Group: doc}}}}
+	h := newPolicyTestHandler(doc)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges", nil)
@@ -152,7 +154,7 @@ func TestAdminGetStatementIPRanges(t *testing.T) {
 func TestAdminListPolicySids(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	doc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow"},{"Sid":"DenyOne","Effect":"Deny"}]}`)
-	h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{Group: doc}}}}
+	h := newPolicyTestHandler(doc)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/admin/policies/ft-user-policy/sids", nil)

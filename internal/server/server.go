@@ -90,10 +90,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 // resolvePolicyDir 返回工作目录下的 policy 目录。
 // 策略只从工作目录加载，不回退到配置文件所在目录。
 func resolvePolicyDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "policy"
-	}
+	wd, _ := os.Getwd()
 	return filepath.Join(wd, "policy")
 }
 

@@ -58,9 +58,9 @@ func TestValidatePolicyIPArgs(t *testing.T) {
 
 func TestBuildPolicyIPItems(t *testing.T) {
 	cidrs := []string{"10.0.0.0/8", "192.168.1.0/24"}
-	items, actions := buildPolicyIPItems(cidrs, map[string]bool{"192.168.1.0/24": true})
-	if len(items) != 5 || len(actions) != 5 {
-		t.Fatalf("items=%d actions=%d", len(items), len(actions))
+	items := buildPolicyIPItems(cidrs, map[string]bool{"192.168.1.0/24": true})
+	if len(items) != 5 {
+		t.Fatalf("items=%d", len(items))
 	}
 	if items[0].Text != "10.0.0.0/8" || !items[0].Selectable || items[0].Checked {
 		t.Fatalf("items[0] = %+v", items[0])
@@ -68,16 +68,16 @@ func TestBuildPolicyIPItems(t *testing.T) {
 	if items[1].Text != "192.168.1.0/24" || !items[1].Checked {
 		t.Fatalf("items[1] = %+v", items[1])
 	}
-	if actions[2].kind != ipActionDelete || items[2].Selectable {
-		t.Fatalf("delete action = %+v item=%+v", actions[2], items[2])
+	if items[2].Text != "[删除选中项]" || items[2].Selectable {
+		t.Fatalf("delete item = %+v", items[2])
 	}
-	for i, want := range []string{ipActionAdd, ipActionReturn} {
-		if actions[3+i].kind != want {
-			t.Fatalf("actions[%d] = %q, want %q", 3+i, actions[3+i].kind, want)
+	for i, want := range []string{"[添加 IP 或网段]", "[返回]"} {
+		if items[3+i].Text != want {
+			t.Fatalf("items[%d] = %q, want %q", 3+i, items[3+i].Text, want)
 		}
 	}
 
-	got := checkedIPs(items, actions)
+	got := checkedIPs(items, cidrs)
 	if len(got) != 1 || got[0] != "192.168.1.0/24" {
 		t.Fatalf("checkedIPs = %v", got)
 	}

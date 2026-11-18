@@ -44,7 +44,8 @@ func MultiSelect(label string, items []MultiItem) (int, error) {
 	fmt.Print("\033[?25l")
 	defer fmt.Print("\033[?25h")
 
-	height := stdoutHeight() - 3
+	_, height := stdoutSize()
+	height -= 3
 	if height < 1 {
 		height = 1
 	}
@@ -137,7 +138,8 @@ func (m *multiSelect) clear() {
 }
 
 func (m *multiSelect) lines() []string {
-	width := stdoutWidth() - 1
+	width, _ := stdoutSize()
+	width--
 	if width < 20 {
 		width = 20
 	}
@@ -180,18 +182,19 @@ func truncateDisplayWidth(s string, width int) string {
 	return runewidth.Truncate(s, width, "")
 }
 
-func stdoutWidth() int {
-	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
-		return w
+// stdoutSize 返回终端的宽和高，获取失败时使用默认值。
+func stdoutSize() (int, int) {
+	w, h, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 120, 24
 	}
-	return 120
-}
-
-func stdoutHeight() int {
-	if _, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && h > 0 {
-		return h
+	if w <= 0 {
+		w = 120
 	}
-	return 24
+	if h <= 0 {
+		h = 24
+	}
+	return w, h
 }
 
 func readKey(f *os.File) (rune, error) {

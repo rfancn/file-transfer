@@ -8,6 +8,12 @@ import (
 	"github.com/rfancn/file-transfer/internal/logging"
 )
 
+// 审计上下文键，handler 通过它们在请求中补充审计动作和目标。
+const (
+	ContextAuditAction = "audit_action"
+	ContextAuditTarget = "audit_target"
+)
+
 // auditActions 把路由映射为语义化审计动作。
 var auditActions = map[string]string{
 	"POST /v1/users":                                         "user.register",
@@ -54,14 +60,14 @@ func Audit() gin.HandlerFunc {
 			actor = "anonymous"
 			actorType = "anonymous"
 		}
-		action := c.GetString("audit_action")
+		action := c.GetString(ContextAuditAction)
 		if action == "" {
 			action = auditAction(c.Request.Method, c.FullPath())
 		}
 		if action == "" {
 			action = c.Request.Method + " " + c.Request.URL.Path
 		}
-		target := c.GetString("audit_target")
+		target := c.GetString(ContextAuditTarget)
 		if target == "" {
 			target = c.Request.URL.RequestURI()
 		}

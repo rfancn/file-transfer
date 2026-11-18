@@ -15,6 +15,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/iam"
 	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/protocol"
+	"github.com/rfancn/file-transfer/internal/server/middleware"
 	"github.com/rfancn/file-transfer/internal/server/response"
 )
 
@@ -93,7 +94,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
-	c.Set("audit_target", username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
 		return
@@ -151,7 +152,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 	}
 	if action != "" {
 		logging.Warn("已创建"+role+"用户", "username", username, "group", group)
-		c.Set("audit_action", action)
+		c.Set(middleware.ContextAuditAction, action)
 	}
 	response.JSON(c, http.StatusCreated, protocol.AddUserResponse{Username: username, Password: password})
 }
@@ -159,7 +160,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 // AdminResetPassword 为已存在的用户生成并设置新的 8 位密码。
 func (h *Handler) AdminResetPassword(c *gin.Context) {
 	username := c.Param("username")
-	c.Set("audit_target", username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能重置密码")
 		return
@@ -221,7 +222,7 @@ func (h *Handler) AdminListUsers(c *gin.Context) {
 // AdminDelete 删除用户及其全部数据。
 func (h *Handler) AdminDelete(c *gin.Context) {
 	username := c.Param("username")
-	c.Set("audit_target", username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能删除")
 		return
@@ -259,7 +260,7 @@ func (h *Handler) AdminListPolicySids(c *gin.Context) {
 func (h *Handler) AdminGetStatementIPRanges(c *gin.Context) {
 	policyName := c.Param("name")
 	sid := c.Param("sid")
-	c.Set("audit_target", policyName+"/"+sid)
+	c.Set(middleware.ContextAuditTarget, policyName+"/"+sid)
 	cidrs, err := h.IAM.StatementIPRanges(policyName, sid)
 	if err != nil {
 		logging.Error("admin get statement ip ranges", "policy", policyName, "sid", sid, "err", err)
@@ -283,7 +284,7 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	}
 	policyName := c.Param("name")
 	sid := c.Param("sid")
-	c.Set("audit_target", policyName+"/"+sid)
+	c.Set(middleware.ContextAuditTarget, policyName+"/"+sid)
 	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, strings.TrimSpace(req.Mode))
 	if err != nil {
 		logging.Error("admin set statement ip ranges", "policy", policyName, "sid", sid, "err", err)
