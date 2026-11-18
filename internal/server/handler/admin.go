@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -245,4 +246,64 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 		return
 	}
 	response.JSON(c, http.StatusOK, map[string]any{"deleted": true, "objects": n})
+}
+
+// AdminSetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
+func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
+	var req protocol.SetStatementIPRangesRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Cidrs == nil {
+		response.Err(c, http.StatusBadRequest, "invalid_request", "cidrs 不能为空")
+		return
+	}
+	policyName := c.Param("name")
+	sid := c.Param("sid")
+	opts := iam.PolicyOptions{
+		HomeBucket:   h.Cfg.S3.HomeBucket,
+		SharedBucket: h.Cfg.S3.SharedBucket,
+		SharedDirs:   h.Cfg.S3.SharedDirs,
+	}
+	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, opts)
+	if err != nil {
+		logging.Error("admin set statement ip ranges", "policy", policyName, "sid", sid, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	logging.Audit(logging.AuditEvent{
+		Action:    "admin.policy.ip.set",
+		Actor:     c.GetString("admin"),
+		ActorType: "admin",
+		Target:    policyName + "/" + sid,
+		Result:    "success",
+		RequestID: c.GetString("request_id"),
+		RemoteIP:  c.ClientIP(),
+	})
+	response.JSON(c, http.StatusOK, protocol.SetStatementIPRangesResponse{
+		Policy: policyName,
+		Sid:    sid,
+		Cidrs:  cidrs,
+	})
+}
+
+func writePolicyError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, iam.ErrInvalidCIDR):
+		response.Err(c, http.StatusBadRequest, "invalid_cidr", err.Error())
+	case errors.Is(err, iam.ErrServicePolicy):
+		response.Err(c, http.StatusForbidden, "service_policy", err.Error())
+	case errors.Is(err, iam.ErrUnsupportedPolicy):
+		response.Err(c, http.StatusBadRequest, "unsupported_policy", "只允许 ft-user-policy、ft-operator-policy、shared-operator-policy")
+	case errors.Is(err, iam.ErrSIDNotFound):
+		response.Err(c, http.StatusBadRequest, "sid_not_found", "策略中不存在指定 Sid，请先执行 ft-admin init 更新策略")
+	case errors.Is(err, iam.ErrStatementNotAllow):
+		response.Err(c, http.StatusBadRequest, "statement_not_allow", "只能给 Allow 语句设置 IP 白名单")
+	case errors.Is(err, iam.ErrInvalidPolicy):
+		response.Err(c, http.StatusInternalServerError, "invalid_policy", "策略内容无效")
+	case errors.Is(err, iam.ErrPolicyWrite):
+		response.Err(c, http.StatusInternalServerError, "policy_write_failed", "写入策略文件失败，请检查 policy 目录权限")
+	case errors.Is(err, iam.ErrApplyFailed):
+		response.Err(c, http.StatusBadGateway, "apply_failed", "规则已写入模板但下发 RustFS 失败，请重试或执行 ft-admin init")
+	default:
+		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "RustFS 管理服务不可用")
+	}
 }
