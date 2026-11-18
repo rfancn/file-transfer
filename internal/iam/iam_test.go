@@ -2,20 +2,26 @@ package iam
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
+// policyStatement 是测试断言策略 JSON 时使用的通用语句结构。
+type policyStatement struct {
+	Sid       string
+	Effect    string
+	Action    []string
+	Resource  []string
+	Condition map[string]map[string]any
+}
+
 // policyDoc 是测试断言策略 JSON 时使用的通用结构。
 type policyDoc struct {
-	Statement []struct {
-		Effect    string
-		Action    []string
-		Resource  []string
-		Condition map[string]map[string]any
-	}
+	Statement []policyStatement
 }
 
 func loadTestPolicies(t *testing.T) *Policies {
@@ -503,8 +509,115 @@ func TestIsSystemUser(t *testing.T) {
 	}
 }
 
-func TestUserPolicyName(t *testing.T) {
-	if got := UserPolicyName("alice"); got != "ft-user-alice-policy" {
-		t.Fatalf("got %s", got)
+func TestPoliciesDocument(t *testing.T) {
+	tests := []struct {
+		name string
+		get  func(*Policies) []byte
+	}{
+		{UserGroupPol, func(p *Policies) []byte { return p.Group }},
+		{AdminGroupPol, func(p *Policies) []byte { return p.Operator }},
+		{SharedAdminPol, func(p *Policies) []byte { return p.SharedOperator }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := loadTestPolicies(t)
+			original, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(original) != string(tt.get(p)) {
+				t.Fatalf("%s Document 返回值与字段不一致", tt.name)
+			}
+
+			updated := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow","Action":["s3:PutObject"],"Resource":["*"]}]}`)
+			expected := append([]byte(nil), updated...)
+			if err := p.SetDocument(tt.name, updated); err != nil {
+				t.Fatal(err)
+			}
+
+			// 写侧拷贝：修改入参不应影响已存储内容。
+			updated[0] = 'y'
+			stored, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(stored) != string(expected) {
+				t.Fatalf("%s SetDocument 别名了入参: %s", tt.name, stored)
+			}
+
+			// 读侧拷贝：修改返回切片不应影响已存储内容。
+			stored[0] = 'x'
+			again, err := p.Document(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(again) != string(expected) {
+				t.Fatalf("%s Document 返回了内部切片: %s", tt.name, again)
+			}
+		})
+	}
+
+	p := loadTestPolicies(t)
+	if _, err := p.Document(DataPolicy); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
+	}
+	if err := p.SetDocument(ServerAdminPol, []byte(`{}`)); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("err = %v, want ErrUnsupportedPolicy", err)
+	}
+}
+
+func TestPoliciesConcurrentDocumentAccess(t *testing.T) {
+	p := loadTestPolicies(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = p.Document(UserGroupPol)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = p.SetDocument(UserGroupPol, []byte(`{"Version":"2012-10-17","Statement":[]}`))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestPolicyTemplateSIDs(t *testing.T) {
+	expected := map[string][]string{
+		policyUserGroupFile: {
+			"HomeBucketMetadata", "ListOwnDirs", "UploadWrite", "UploadMarkerProtect",
+			"SharedBucketMetadata", "SharedRootList", "SharedDirList", "SharedRead",
+		},
+		policyOperatorFile: {
+			"ListAllBuckets", "HomeBucketMetadata", "ListRootDirs", "ListInboundRecursive",
+			"UploadDirDeny", "OutsideInboundDeny", "InboundWrite", "InboundMarkerProtect", "OutboundRead",
+		},
+		policySharedOperatorFile: {
+			"SharedBucketMetadata", "SharedBucketList", "SharedMultipart",
+			"SharedRead", "SharedWrite", "SharedMarkerProtect", "SharedBucketDeleteDeny",
+		},
+	}
+	for file, want := range expected {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "policy", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc policyDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		if len(doc.Statement) != len(want) {
+			t.Fatalf("%s 语句数量 = %d，期望 %d", file, len(doc.Statement), len(want))
+		}
+		for i := range doc.Statement {
+			if doc.Statement[i].Sid != want[i] {
+				t.Fatalf("%s 第 %d 条语句 Sid = %s，期望 %s", file, i+1, doc.Statement[i].Sid, want[i])
+			}
+		}
 	}
 }

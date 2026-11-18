@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/minio/minio-go/v7"
 	"github.com/rfancn/file-transfer/internal/logging"
+	"github.com/rfancn/file-transfer/internal/server/middleware"
 	"github.com/rfancn/file-transfer/internal/server/response"
 )
 
@@ -21,6 +22,7 @@ type cleanResponse struct {
 
 func (h *Handler) AdminClean(c *gin.Context) {
 	dir := c.Param("dir")
+	c.Set(middleware.ContextAuditTarget, dir)
 	switch dir {
 	case "inbound", "outbound", "upload", "incomplete":
 	default:

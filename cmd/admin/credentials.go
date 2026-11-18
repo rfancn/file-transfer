@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,11 +19,21 @@ const defaultAdminServerURL = "http://127.0.0.1:8080"
 
 // promptCredential 交互读取一项凭据。ok 为 false 表示用户取消。
 func promptCredential(label string, secret bool) (value string, ok bool) {
+	return promptCredentialWithDefault(label, "", secret)
+}
+
+// promptCredentialWithDefault 读取凭据；非密码项支持默认值。
+func promptCredentialWithDefault(label, defaultVal string, secret bool) (value string, ok bool) {
 	var err error
 	if secret {
-		value, err = cliui.Password(label)
+		value, err = cliui.PasswordWithValidate(label, func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return errors.New("密码不能为空")
+			}
+			return nil
+		})
 	} else {
-		value, err = cliui.Input(label, "", nil)
+		value, err = cliui.Input(label, defaultVal, nil)
 	}
 	if canceledByUser(err) {
 		return "", false
@@ -42,16 +53,21 @@ func login(cfg config.AdminConfig, user, pass string) *adminapi.Client {
 	}
 	// 非交互提供的完整凭据重试没有意义：失败只会重复同一组错误凭据。
 	attempts := 3
-	if user != "" && pass != "" {
+	if strings.TrimSpace(user) != "" && pass != "" {
 		attempts = 1
 	}
 	for i := 0; i < attempts; i++ {
-		u, p := serverAdminCreds(user, pass)
+		if i == 0 {
+			user, pass = serverAdminCreds(user, pass)
+		} else {
+			fmt.Printf("管理员 %s 登录失败，请重新输入密码\n", user)
+			pass = promptPassword()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err = ac.Login(ctx, u, p)
+		err = ac.Login(ctx, user, pass)
 		cancel()
 		if err == nil {
-			fmt.Printf("管理员 %s 登录成功\n", u)
+			fmt.Printf("管理员 %s 登录成功\n", user)
 			return ac
 		}
 		if ae, ok := adminapi.AsAPIError(err); ok && ae.Status == http.StatusUnauthorized {
@@ -67,10 +83,27 @@ func login(cfg config.AdminConfig, user, pass string) *adminapi.Client {
 	return nil
 }
 
+// promptPassword 读取管理员密码；密码不能为空。
+func promptPassword() string {
+	if !cliui.IsInteractive() {
+		log.Fatal("缺少 ft-server 管理员密码（可用 --admin-password 提供）")
+	}
+	value, ok := promptCredential("ft-server 管理员密码", true)
+	if !ok {
+		os.Exit(130)
+	}
+	return value
+}
+
+// promptAdminUsername 读取管理员用户名，默认 admin。
+func promptAdminUsername() (string, bool) {
+	return promptCredentialWithDefault("ft-server 管理员用户名", "admin", false)
+}
+
 // serverAdminCreds 返回 ft-server 管理员凭证：命令行参数优先，否则交互输入。
 func serverAdminCreds(user, pass string) (string, string) {
 	if user = strings.TrimSpace(user); user == "" {
-		if value, ok := promptCredential("ft-server 管理员用户名 [admin]", false); ok && value != "" {
+		if value, ok := promptAdminUsername(); ok && value != "" {
 			user = value
 		} else if !ok && cliui.IsInteractive() {
 			os.Exit(130)
@@ -79,14 +112,7 @@ func serverAdminCreds(user, pass string) (string, string) {
 		}
 	}
 	if pass == "" {
-		if value, ok := promptCredential("ft-server 管理员密码", true); ok {
-			pass = value
-		} else if cliui.IsInteractive() {
-			os.Exit(130)
-		}
-	}
-	if pass == "" {
-		log.Fatal("缺少 ft-server 管理员密码（可用 --admin-password 提供）")
+		pass = promptPassword()
 	}
 	return user, pass
 }

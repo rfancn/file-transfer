@@ -3,12 +3,16 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rfancn/file-transfer/internal/auth"
 	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/server/app"
 )
 
@@ -75,6 +79,66 @@ func TestUserAuth(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("admin token should not access client routes: %d", rr.Code)
+	}
+}
+
+func TestAuditAction(t *testing.T) {
+	tests := []struct {
+		method, path, want string
+	}{
+		{http.MethodPost, "/v1/users", "user.register"},
+		{http.MethodPost, "/v1/sessions", "user.login"},
+		{http.MethodPut, "/v1/files/*path", "file.upload"},
+		{http.MethodPost, "/v1/admin/users", "admin.user.add"},
+		{http.MethodGet, "/v1/admin/policies/:name/sids", "admin.policy.sids"},
+		{http.MethodPut, "/v1/admin/policies/:name/statements/:sid/ip-ranges", "admin.policy.ip.set"},
+		{http.MethodGet, "/v1/unknown", ""},
+	}
+	for _, tt := range tests {
+		if got := auditAction(tt.method, tt.path); got != tt.want {
+			t.Fatalf("%s %s = %q, want %q", tt.method, tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestAuditLogsActorActionTarget(t *testing.T) {
+	dir := t.TempDir()
+	if err := logging.Init(filepath.Join(dir, "ft-server.log"), logging.Rotate{
+		MaxAgeDays: 1,
+		MaxBackups: 2,
+		MaxSizeMB:  1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(Audit())
+	r.PUT("/v1/files/*path", func(c *gin.Context) {
+		c.Set("username", "alice")
+		c.Set(ContextAuditTarget, "outbound/a.txt")
+		c.Status(http.StatusOK)
+	})
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/v1/files/outbound/a.txt", nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "ft-server", "ft-server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`"event":"audit"`,
+		`"action":"file.upload"`,
+		`"actor":"alice"`,
+		`"actor_type":"user"`,
+		`"target":"outbound/a.txt"`,
+		`"time":`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("审计日志缺少 %s: %s", want, content)
+		}
 	}
 }
 

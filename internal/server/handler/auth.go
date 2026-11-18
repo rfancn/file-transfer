@@ -14,6 +14,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/protocol"
 	"github.com/rfancn/file-transfer/internal/s3"
+	"github.com/rfancn/file-transfer/internal/server/middleware"
 	"github.com/rfancn/file-transfer/internal/server/response"
 )
 
@@ -28,6 +29,7 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
 		return
@@ -83,6 +85,7 @@ func (h *Handler) Session(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	c.Set(middleware.ContextAuditTarget, username)
 	password := req.Password
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
@@ -160,6 +163,7 @@ func (h *Handler) AdminLogin(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if username == "" || req.Password == "" || !h.Admins.Verify(username, req.Password) {
 		response.Err(c, http.StatusUnauthorized, "invalid_credentials", "管理员用户名或密码错误")
 		return
@@ -183,9 +187,6 @@ func (h *Handler) isRegisteredUser(ctx context.Context, username string) bool {
 	info, err := h.IAM.Admin.GetUserInfo(ctx, username)
 	if err != nil {
 		return false
-	}
-	if info.PolicyName == iam.UserPolicyName(username) {
-		return true
 	}
 	for _, g := range info.MemberOf {
 		if g == iam.UserGroup {

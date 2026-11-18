@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/madmin-go/v3"
@@ -35,22 +36,9 @@ const (
 	ServerAdminPol = "ft-admin-policy"
 )
 
-// groupSpec 描述一个可分配的用户组及其绑定的策略。
-type groupSpec struct {
-	policy string
-	doc    func(*Policies) []byte
-}
-
-// groupSpecs 是用户组到策略的统一映射，新增组时只改这里。
-var groupSpecs = map[string]groupSpec{
-	UserGroup:        {UserGroupPol, func(p *Policies) []byte { return p.Group }},
-	AdminGroup:       {AdminGroupPol, func(p *Policies) []byte { return p.Operator }},
-	SharedAdminGroup: {SharedAdminPol, func(p *Policies) []byte { return p.SharedOperator }},
-}
-
 // IsValidGroup 返回 name 是否为可分配的用户组。
 func IsValidGroup(name string) bool {
-	_, ok := groupSpecs[name]
+	_, ok := policyDefForGroup(name)
 	return ok
 }
 
@@ -82,6 +70,8 @@ type Manager struct {
 	S3            *s3.Manager
 	PlaceholderS3 *s3.Manager
 	Policies      *Policies
+	PolicyDir     string
+	Options       PolicyOptions
 	Bucket        string
 }
 
@@ -104,8 +94,6 @@ func splitEndpoint(endpoint string) (string, bool) {
 	}
 	return endpoint, strings.HasPrefix(endpoint, "https://")
 }
-
-func UserPolicyName(user string) string { return "ft-user-" + user + "-policy" }
 
 func (m *Manager) UserExists(ctx context.Context, name string) (bool, error) {
 	_, err := m.Admin.GetUserInfo(ctx, name)
@@ -142,7 +130,31 @@ func (m *Manager) EnsurePolicy(ctx context.Context, name string, policy []byte) 
 	return err
 }
 
+// policyWriteMu 串行化所有策略写操作（模板写回与策略下发）。
+var policyWriteMu sync.Mutex
+
+// ReplacePolicy 替换策略并恢复绑定；所有策略写操作共享同一把锁。
 func (m *Manager) ReplacePolicy(ctx context.Context, name string, policy []byte, users, groups []string) error {
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
+	return m.replacePolicy(ctx, name, policy, users, groups)
+}
+
+// ReplacePolicyFromDocument 在写入锁内读取最新内存文档并下发。
+func (m *Manager) ReplacePolicyFromDocument(ctx context.Context, name string, users, groups []string) error {
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
+	if m.Policies == nil {
+		return errors.New("IAM 策略未加载")
+	}
+	doc, err := m.Policies.Document(name)
+	if err != nil {
+		return err
+	}
+	return m.replacePolicy(ctx, name, doc, users, groups)
+}
+
+func (m *Manager) replacePolicy(ctx context.Context, name string, policy []byte, users, groups []string) error {
 	existing, err := m.Admin.InfoCannedPolicy(ctx, name)
 	if err != nil {
 		low := strings.ToLower(err.Error())
@@ -346,8 +358,11 @@ func (m *Manager) SetupUser(ctx context.Context, user, password, group string) (
 
 // applyGroupPolicy 把组对应的策略绑定到该组。
 func (m *Manager) applyGroupPolicy(ctx context.Context, group string) error {
-	spec := groupSpecs[group]
-	return m.ReplacePolicy(ctx, spec.policy, spec.doc(m.Policies), nil, []string{group})
+	def, ok := policyDefForGroup(group)
+	if !ok {
+		return fmt.Errorf("不支持的组: %s", group)
+	}
+	return m.ReplacePolicyFromDocument(ctx, def.Policy, nil, []string{group})
 }
 
 func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error) {
@@ -363,15 +378,12 @@ func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error
 	if err != nil {
 		return false, n, fmt.Errorf("清理用户数据 %s: %w", user, err)
 	}
-	oldPolicy := UserPolicyName(user)
-	_ = m.Detach(ctx, oldPolicy, user, "")
 	for _, g := range info.MemberOf {
 		_ = m.RemoveFromGroup(ctx, g, user)
 	}
 	if err := m.Admin.RemoveUser(ctx, user); err != nil {
 		return true, n, err
 	}
-	_ = m.Admin.RemoveCannedPolicy(ctx, oldPolicy)
 	return true, n, nil
 }
 

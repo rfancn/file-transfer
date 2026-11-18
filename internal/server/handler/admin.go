@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/rfancn/file-transfer/internal/iam"
 	"github.com/rfancn/file-transfer/internal/logging"
 	"github.com/rfancn/file-transfer/internal/protocol"
+	"github.com/rfancn/file-transfer/internal/server/middleware"
 	"github.com/rfancn/file-transfer/internal/server/response"
 )
 
@@ -92,6 +94,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	c.Set(middleware.ContextAuditTarget, username)
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
 		return
@@ -149,15 +152,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 	}
 	if action != "" {
 		logging.Warn("已创建"+role+"用户", "username", username, "group", group)
-		logging.Audit(logging.AuditEvent{
-			Action:    action,
-			Actor:     c.GetString("admin"),
-			ActorType: "admin",
-			Target:    username,
-			Result:    "success",
-			RequestID: c.GetString("request_id"),
-			RemoteIP:  c.ClientIP(),
-		})
+		c.Set(middleware.ContextAuditAction, action)
 	}
 	response.JSON(c, http.StatusCreated, protocol.AddUserResponse{Username: username, Password: password})
 }
@@ -165,6 +160,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 // AdminResetPassword 为已存在的用户生成并设置新的 8 位密码。
 func (h *Handler) AdminResetPassword(c *gin.Context) {
 	username := c.Param("username")
+	c.Set(middleware.ContextAuditTarget, username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能重置密码")
 		return
@@ -226,6 +222,7 @@ func (h *Handler) AdminListUsers(c *gin.Context) {
 // AdminDelete 删除用户及其全部数据。
 func (h *Handler) AdminDelete(c *gin.Context) {
 	username := c.Param("username")
+	c.Set(middleware.ContextAuditTarget, username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能删除")
 		return
@@ -245,4 +242,91 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 		return
 	}
 	response.JSON(c, http.StatusOK, map[string]any{"deleted": true, "objects": n})
+}
+
+// AdminListPolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid。
+func (h *Handler) AdminListPolicySids(c *gin.Context) {
+	policyName := c.Param("name")
+	sids, err := h.IAM.PolicySids(policyName)
+	if err != nil {
+		logging.Error("admin list policy sids", "policy", policyName, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, protocol.ListPolicySidsResponse{Policy: policyName, Sids: sids})
+}
+
+// AdminGetStatementIPRanges 返回指定策略语句当前的 IP 白名单。
+func (h *Handler) AdminGetStatementIPRanges(c *gin.Context) {
+	policyName := c.Param("name")
+	sid := c.Param("sid")
+	c.Set(middleware.ContextAuditTarget, policyName+"/"+sid)
+	cidrs, err := h.IAM.StatementIPRanges(policyName, sid)
+	if err != nil {
+		logging.Error("admin get statement ip ranges", "policy", policyName, "sid", sid, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, protocol.SetStatementIPRangesResponse{
+		Policy: policyName,
+		Sid:    sid,
+		Cidrs:  cidrs,
+	})
+}
+
+// AdminSetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
+func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
+	var req protocol.SetStatementIPRangesRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Cidrs == nil {
+		response.Err(c, http.StatusBadRequest, "invalid_request", "请求参数错误")
+		return
+	}
+	policyName := c.Param("name")
+	sid := c.Param("sid")
+	c.Set(middleware.ContextAuditTarget, policyName+"/"+sid)
+	cidrs, err := h.IAM.SetStatementIPRanges(c.Request.Context(), policyName, sid, *req.Cidrs, strings.TrimSpace(req.Mode))
+	if err != nil {
+		logging.Error("admin set statement ip ranges", "policy", policyName, "sid", sid, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	logging.Info("admin policy ip set",
+		"policy", policyName,
+		"sid", sid,
+		"cidrs", cidrs,
+		"actor", c.GetString("admin"),
+		"request_id", c.GetString("request_id"))
+	response.JSON(c, http.StatusOK, protocol.SetStatementIPRangesResponse{
+		Policy: policyName,
+		Sid:    sid,
+		Cidrs:  cidrs,
+	})
+}
+
+func writePolicyError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, iam.ErrInvalidCIDR):
+		response.Err(c, http.StatusBadRequest, "invalid_cidr", err.Error())
+	case errors.Is(err, iam.ErrInvalidMode):
+		response.Err(c, http.StatusBadRequest, "invalid_mode", "mode 只允许 "+iam.IPRangeSet+"、"+iam.IPRangeAdd+" 或 "+iam.IPRangeRemove)
+	case errors.Is(err, iam.ErrServicePolicy):
+		response.Err(c, http.StatusForbidden, "service_policy", err.Error())
+	case errors.Is(err, iam.ErrUnsupportedPolicy):
+		response.Err(c, http.StatusBadRequest, "unsupported_policy", "只允许 "+strings.Join(iam.EditablePolicies(), "、"))
+	case errors.Is(err, iam.ErrSIDNotFound):
+		response.Err(c, http.StatusBadRequest, "sid_not_found", "策略中不存在指定 Sid，请确认 policy/*.json 包含该 Sid，并执行 ft-admin init 更新策略")
+	case errors.Is(err, iam.ErrStatementNotAllow):
+		response.Err(c, http.StatusBadRequest, "statement_not_allow", "只能给 Allow 语句设置 IP 白名单")
+	case errors.Is(err, iam.ErrInvalidPolicy):
+		response.Err(c, http.StatusInternalServerError, "invalid_policy", "策略内容无效")
+	case errors.Is(err, iam.ErrPolicyRead):
+		response.Err(c, http.StatusInternalServerError, "policy_read_failed", "读取策略文件失败，请检查 policy 目录和配置")
+	case errors.Is(err, iam.ErrPolicyWrite):
+		response.Err(c, http.StatusInternalServerError, "policy_write_failed", "写入策略文件失败，请检查 policy 目录权限")
+	case errors.Is(err, iam.ErrApplyFailed):
+		response.Err(c, http.StatusBadGateway, "apply_failed", "规则已写入模板但下发 RustFS 失败，请重试或执行 ft-admin init")
+	default:
+		response.Err(c, http.StatusBadGateway, "rustfs_unavailable", "RustFS 管理服务不可用")
+	}
 }

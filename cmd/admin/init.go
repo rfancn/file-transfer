@@ -42,15 +42,17 @@ func init() {
 }
 
 // runInit 收集 root 凭据并调用 ft-server 的初始化接口；凭据只在内存中使用。
-func runInit(cfg *config.AdminConfig, ac *adminapi.Client, accessKey, secretKey string) {
+// 返回 true 表示初始化成功。
+func runInit(cfg *config.AdminConfig, ac *adminapi.Client, accessKey, secretKey string) bool {
 	if !ensureAdminCreds(cfg, accessKey, secretKey) {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if err := ac.Init(ctx, cfg.S3.AccessKey, cfg.S3.SecretKey); err != nil {
 		failf("初始化失败: %v（请确认 root AK/SK 正确，且 ft-server 能访问 s3.endpoint）", err)
-		return
+		return false
 	}
 	fmt.Println("初始化完成。首次初始化时 ft-server 会自动重启以加载配置。")
+	return true
 }

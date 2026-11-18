@@ -36,6 +36,9 @@ func TestRouteGroupsRequireAuth(t *testing.T) {
 		{http.MethodPut, "/v1/admin/users/alice/password", "", http.StatusUnauthorized},
 		{http.MethodPost, "/v1/admin/bootstrap", "{}", http.StatusUnauthorized},
 		{http.MethodDelete, "/v1/admin/data/inbound?days=7", "", http.StatusUnauthorized},
+		{http.MethodGet, "/v1/admin/policies/ft-user-policy/sids", "", http.StatusUnauthorized},
+		{http.MethodGet, "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges", "", http.StatusUnauthorized},
+		{http.MethodPut, "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges", `{"cidrs":[]}`, http.StatusUnauthorized},
 		// 登录接口公开；空用户名直接返回 401，不会访问管理员存储。
 		{http.MethodPost, "/v1/admin/login", "{}", http.StatusUnauthorized},
 	}

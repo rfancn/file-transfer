@@ -226,15 +226,6 @@ make build
 
 完整配置见 [config/ft-server.example.toml](config/ft-server.example.toml)。
 
-> **升级说明：**
->
-> - `s3.bucket` 已移除。请把原桶名填入 `s3.home_bucket`，并补充 `shared_bucket` / `shared_dirs`；保留旧 `bucket` 键会导致启动报错。
-> - 环境变量只保留 `FT_S3_ENDPOINT`。配置文件路径改用 `-c` / `--config`，不再读取 `FT_SERVER_CONFIG` / `FT_CLIENT_CONFIG` / `FT_ADMIN_CONFIG`。
-> - 命令行长参数统一使用 `--`，例如 `--config`、`--group`、`--days`；旧的 `-config` 等单横线写法不再支持。
-> - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
-> - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
-> - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
-
 首次启动时：
 
 - `auth.token_secret` / `auth.upload_secret` 为空或仍为示例值时，会自动生成随机密钥并写回配置；
@@ -249,7 +240,7 @@ ExecStart=/usr/local/bin/ft-server -c /etc/file-transfer/ft-server.toml
 Restart=always
 ```
 
-把仓库根目录的 `policy/` 复制到 `/etc/file-transfer/policy`。`ft-server` 固定使用 `policy` 目录，会先按工作目录、再按配置文件所在目录查找，无需额外配置。
+把仓库根目录的 `policy/` 复制到 `ft-server` 工作目录下的 `policy/`（上面的 systemd 示例即 `/var/lib/ft-server/policy`）。`ft-server` 只从工作目录加载策略，不再回退到配置文件所在目录。
 
 #### Docker Compose 部署
 
@@ -259,7 +250,7 @@ Restart=always
 docker compose up -d --build
 ```
 
-配置、密钥和日志分别持久化到 `./config`、`./secrets`、`./logs`（日志文件为 `./logs/ft-server/ft-server.log`）。首次启动会自动生成 `./config/ft-server.toml`；如需自定义配置，可先复制示例文件再启动：
+配置、密钥、策略和日志分别持久化到 `./config`、`./secrets`、`./policy`、`./logs`（日志文件为 `./logs/ft-server/ft-server.log`）。首次启动会自动生成 `./config/ft-server.toml`；如需自定义配置，可先复制示例文件再启动：
 
 ```sh
 cp config/ft-server.example.toml config/ft-server.toml
@@ -286,17 +277,130 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
   - `"{{SHARED_DIR_OBJECT_ARNS}}"`：替换为 `s3.shared_dirs` 对应的对象 ARN。
 - `${aws:username}` 是 RustFS IAM 变量，由 RustFS 在鉴权时替换，不是模板占位符。
 - 渲染后会校验 JSON；残留未知 `{{...}}` 会导致启动失败。
-- 用户组策略使用 `${aws:username}`，不再为每个用户创建 `ft-user-<username>-policy`。
+- 用户组策略使用 `${aws:username}` 统一授予用户权限，不再创建单用户策略。
 - 用户组不授予 `s3:ListAllMyBuckets` 和 `s3:ListBucketMultipartUploads`，避免枚举 bucket 或跨用户分片信息；Cyberduck 需直接使用 `home/<username>` 路径。
 - 用户组只能列出共享桶根（用于发现顶层目录）和 `s3.shared_dirs` 配置目录，不能读取其他目录。
 - `ft-operator-group` 不包含任何 `admin:*` 权限，只负责 inbound/outbound 摆渡。
 - `shared-operator-group` 对共享桶有 list/get/put/delete，但不包含 `admin:*` 和桶删除权限。
 - `ft-data` 不授予 Delete 权限；`ft-admin clean` 使用 `ft-admin` 服务身份执行删除。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
-- 策略目录固定为 `policy`，依次在工作目录和配置文件所在目录查找，无需配置。
-- Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 只读挂载到该路径。
-- 修改策略后重启 `ft-server`，再执行 `ft-admin init` 使策略在 RustFS 生效。
+- 策略目录固定为工作目录下的 `policy`，只从此处加载，不再回退到配置文件所在目录。
+- Docker 镜像内默认 `/app/policy`，`docker-compose.yml` 已把 `./policy` 挂载到该路径（可写，供策略 IP 白名单修改模板）。
+- 手工修改 `policy/*.json` 后，需要重启 `ft-server` 并执行 `ft-admin init` 使策略在 RustFS 生效。
+- 通过管理接口或 `ft-admin policy ip` 修改时，规则会立即下发到 RustFS，无需重启。
+- 使用 IP 白名单功能时，运行 `ft-server` 的用户必须对服务端 `policy/` 目录有写权限；不使用该功能时只读即可。
 - 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
+
+##### 策略语句 IP 白名单
+
+可以为三个组策略中的指定语句（Sid）增加 `aws:SourceIp` 条件，只有来自指定网段的请求才能使用该语句的权限。
+
+管理接口：
+
+```http
+PUT /v1/admin/policies/:name/statements/:sid/ip-ranges
+Authorization: Bearer <admin token>
+Content-Type: application/json
+
+{ "cidrs": ["10.0.0.0/8", "192.168.1.0/24"] }
+```
+
+`mode` 可选：`set`（默认，覆盖现有列表）、`add`（追加）、`remove`（移除）。例如：
+
+```json
+{ "cidrs": ["10.0.0.1"], "mode": "add" }
+```
+
+`cidrs` 必须显式提供，缺失返回 `invalid_request`；支持单个 IPv4/IPv6 地址或 CIDR 网段（例如 `10.0.0.1`、`10.0.0.0/8`、`2001:db8::1`），单 IP 规范化为 /32（IPv4）或 /128（IPv6），最多 100 条，服务端会自动去重；只支持 `Allow` 语句。
+
+成功响应（返回修改后的完整列表）：
+
+```json
+{ "policy": "ft-user-policy", "sid": "UploadWrite", "cidrs": ["10.0.0.0/8"] }
+```
+
+读取当前 IP 白名单：
+
+```http
+GET /v1/admin/policies/:name/statements/:sid/ip-ranges
+Authorization: Bearer <admin token>
+```
+
+读取 Sid 列表（`ft-admin` 菜单使用）：
+
+```http
+GET /v1/admin/policies/:name/sids
+Authorization: Bearer <admin token>
+```
+
+返回该策略中所有 `Allow` 语句的 `Sid`，按模板顺序排列：
+
+```json
+{ "policy": "ft-user-policy", "sids": ["HomeBucketMetadata", "ListOwnDirs", "UploadWrite"] }
+```
+
+错误码：
+
+| HTTP | code | 说明 |
+|---|---|---|
+| 400 | `invalid_request` | 请求体非法或缺少 `cidrs` |
+| 400 | `invalid_cidr` | IP/网段格式非法 |
+| 400 | `invalid_mode` | `mode` 不是 set/add/remove |
+| 400 | `unsupported_policy` | 策略不在允许范围 |
+| 403 | `service_policy` | 不允许修改服务身份策略 |
+| 400 | `sid_not_found` | 策略中不存在该 Sid（模板可能缺少 Sid，需先合并新模板） |
+| 400 | `statement_not_allow` | 目标语句不是 Allow |
+| 500 | `invalid_policy` | 策略内容无效 |
+| 500 | `policy_read_failed` | 读取策略文件失败，请检查 policy 目录和配置 |
+| 500 | `policy_write_failed` | 策略目录不可写 |
+| 502 | `apply_failed` | 模板已写入但下发失败 |
+| 502 | `rustfs_unavailable` | RustFS 管理服务不可用 |
+
+- 只允许 `ft-user-policy`、`ft-operator-policy`、`shared-operator-policy`；
+- `cidrs: []` 表示清除该语句的 IP 白名单；
+- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff；
+- 通过管理接口或 `ft-admin policy ip` 修改时立即下发到 RustFS，无需重启；
+- 若接口返回 `apply_failed`，表示模板已更新但下发失败，重试本接口或执行 `ft-admin init` 即可。
+
+> **注意**
+>
+> - `0.0.0.0/0` 放行所有 IPv4，`::/0` 放行所有 IPv6；两者同时设置等于完全关闭该语句的 IP 限制。
+> - 网段设置错误会导致该语句白名单外的用户无法访问（例如 `UploadWrite` 设错会导致白名单外用户无法上传）。
+> - 管理接口本身不受这些 S3 策略限制，仍可通过 `ft-admin policy ip ... --clear` 或重新设置正确网段恢复。
+> - 设置后请分别从白名单内、外地址验证。
+> - 该功能依赖 RustFS 对 `Sid` 和 `aws:SourceIp` 的支持，请先在目标版本上实测。
+
+命令：
+
+```sh
+ft-admin policy ip ft-user-policy UploadWrite 10.0.0.1 192.168.1.0/24
+ft-admin policy ip ft-user-policy UploadWrite 10.0.0.1,192.168.1.0/24
+ft-admin policy ip ft-user-policy UploadWrite --clear
+```
+
+- `--clear` 不能与网段参数同时使用；
+- 非交互执行时必须提供网段或 `--clear`；
+- 单个位置参数可用逗号分隔多个网段；
+- `--yes` 跳过确认；
+- 交互菜单会先读取该策略的 Sid 列表；选择语句后，如果已有 IP 白名单，会直接以多选列表展示当前条目：
+  - 空格勾选要移除的 IP，移动到 `[删除选中项]` 回车批量删除；
+  - `[添加 IP 或网段]`、`[返回]` 为操作项；
+  - 删除/添加后可继续操作，直到选择 `[返回]`。
+- 如果当前列表为空，仍会显示操作项，可直接选择添加。
+
+常用 Sid：
+
+| 策略 | Sid | 说明 |
+|---|---|---|
+| `ft-user-policy` | `UploadWrite` | 自己的 `upload/` 写/删 |
+| `ft-user-policy` | `SharedRead` | 读取 `s3.shared_dirs` 共享目录中的对象 |
+| `ft-operator-policy` | `InboundWrite` | 所有用户 `inbound` 写/删 |
+| `ft-operator-policy` | `OutboundRead` | 读取所有用户 `outbound` |
+| `shared-operator-policy` | `SharedWrite` | 写/删共享桶对象 |
+
+完整 Sid 列表见 `policy/*.json` 中的 `Sid` 字段。
+
+设置后建议从白名单内、外地址分别验证该语句的权限，并检查 `policy/*.json` 中的 `aws:SourceIp` 条件。
 
 ### 3. 初始化 RustFS
 
@@ -323,7 +427,7 @@ ft-admin init --access-key <AK> --secret-key-file /etc/file-transfer/rustfs-secr
 - `ft-operator-group`：摆渡操作员组，绑定所有用户 `inbound`/`outbound` 的策略；
 - `shared-operator-group`：共享操作员组，绑定共享桶 list/get/put/delete 策略。
 
-初始化**不会创建默认操作员或共享操作员账号**。账号通过 `ft-admin user add` 创建时选择对应组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
+初始化**不会创建默认操作员或共享操作员账号**。账号通过 `ft-admin user add` 创建时选择对应组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。在交互菜单中选择“初始化”成功后，`ft-admin` 会退出；`ft-admin init` 子命令完成后也会退出。
 
 ### 4. 创建用户
 
@@ -431,8 +535,9 @@ sudo ./script/install.sh http://ft-server:8080
 | `ft-admin user reset <username>` | 重置用户密码，输出一次性新密码 |
 | `ft-admin user list` | 列出用户、类型、状态、策略和组 |
 | `ft-admin clean [目录] [--days N] [--dry-run] [--yes]` | 清理数据或未完成分片 |
+| `ft-admin policy ip <policy> <sid> [cidr...] [--clear] [--yes]` | 设置策略语句的 IP 白名单 |
 
-无子命令时进入交互菜单：添加用户、删除用户、重置用户密码、列出用户、清理数据、初始化、退出。
+无子命令时进入交互菜单：添加用户、删除用户、重置用户密码、列出用户、清理数据、设置策略 IP 白名单（Sid 与 IP 多选）、初始化、退出。
 
 ### 清理规则
 
@@ -484,8 +589,8 @@ ADMIN_PASSWORD=...
 
 - 登录 token 默认 24 小时有效；客户端凭证失效后会自动重新登录一次。
 - 大文件上传中断后可从已完成分片继续，服务端按保留天数清理长期未完成的分片。
-- 运行日志按大小和天数轮转，记录认证、用户管理、文件访问和清理等审计事件。
-- 审计日志中的客户端用户名和主机名来自客户端自报，可被伪造，仅作辅助审计。
+- 运行日志按大小和天数轮转，所有 `/v1` 请求都会写入 `event=audit` 审计事件，包含时间、操作者（`actor`/`actor_type`）、语义动作（`action`，如 `user.login`、`file.upload`、`admin.user.add`、`admin.policy.ip.set`）、对象（`target`）、结果（`result`）和请求 ID。
+- 审计日志不记录密码、token 或密钥；客户端自报的用户名和主机名（`X-Client-User`/`X-Client-Host`）可被伪造，仅作辅助审计。
 - 修改用户策略或权限后，建议重启 `ft-server` 使策略重新生效。
 
 ### 应用层 I/O 限速

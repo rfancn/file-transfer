@@ -85,3 +85,19 @@ type InitResponse struct {
 	UploadID string `json:"upload_id"`
 	PartSize int64  `json:"part_size"`
 }
+
+type SetStatementIPRangesRequest struct {
+	Cidrs *[]string `json:"cidrs"`
+	Mode  string    `json:"mode,omitempty"`
+}
+
+type SetStatementIPRangesResponse struct {
+	Policy string   `json:"policy"`
+	Sid    string   `json:"sid"`
+	Cidrs  []string `json:"cidrs"`
+}
+
+type ListPolicySidsResponse struct {
+	Policy string   `json:"policy"`
+	Sids   []string `json:"sids"`
+}

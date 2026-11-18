@@ -115,7 +115,7 @@ func Run(ctx context.Context, cfg config.ServerConfig, policies *iam.Policies, a
 	if err := mgr.EnsureGroup(ctx, iam.UserGroup); err != nil {
 		return res, fmt.Errorf("创建用户组 %s: %w", iam.UserGroup, err)
 	}
-	if err := mgr.ReplacePolicy(ctx, iam.UserGroupPol, policies.Group, nil, []string{iam.UserGroup}); err != nil {
+	if err := mgr.ReplacePolicyFromDocument(ctx, iam.UserGroupPol, nil, []string{iam.UserGroup}); err != nil {
 		return res, fmt.Errorf("更新用户组策略: %w", err)
 	}
 	if err := mgr.EnsureOperatorGroup(ctx); err != nil {

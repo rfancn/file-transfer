@@ -56,5 +56,8 @@ func New(a *app.App) *gin.Engine {
 	protected.PUT("/users/:username/password", middleware.RequireReady(a), h.AdminResetPassword)
 	protected.DELETE("/users/:username", middleware.RequireReady(a), h.AdminDelete)
 	protected.DELETE("/data/:dir", middleware.RequireReady(a), h.AdminClean)
+	protected.GET("/policies/:name/sids", middleware.RequireReady(a), h.AdminListPolicySids)
+	protected.GET("/policies/:name/statements/:sid/ip-ranges", middleware.RequireReady(a), h.AdminGetStatementIPRanges)
+	protected.PUT("/policies/:name/statements/:sid/ip-ranges", middleware.RequireReady(a), h.AdminSetStatementIPRanges)
 	return r
 }

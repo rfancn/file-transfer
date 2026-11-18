@@ -201,6 +201,64 @@ func (c *Client) Clean(ctx context.Context, dir string, days int, dryRun bool) (
 	return out, nil
 }
 
+// ListPolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid。
+func (c *Client) ListPolicySids(ctx context.Context, policyName string) ([]string, error) {
+	var out protocol.ListPolicySidsResponse
+	u := c.baseURL + "/v1/admin/policies/" + url.PathEscape(policyName) + "/sids"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return out.Sids, nil
+}
+
+// ChangeStatementIPRanges 按 set/add/remove 模式修改指定策略语句的 IP 白名单。
+func (c *Client) ChangeStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, mode string) (protocol.SetStatementIPRangesResponse, error) {
+	var out protocol.SetStatementIPRangesResponse
+	if cidrs == nil {
+		cidrs = []string{}
+	}
+	payload, err := json.Marshal(protocol.SetStatementIPRangesRequest{Cidrs: &cidrs, Mode: mode})
+	if err != nil {
+		return out, err
+	}
+	u := c.statementIPRangesURL(policyName, sid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(payload))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// GetStatementIPRanges 返回指定策略语句当前的 IP 白名单。
+func (c *Client) GetStatementIPRanges(ctx context.Context, policyName, sid string) ([]string, error) {
+	var out protocol.SetStatementIPRangesResponse
+	u := c.statementIPRangesURL(policyName, sid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return out.Cidrs, nil
+}
+
+func (c *Client) statementIPRangesURL(policyName, sid string) string {
+	return c.baseURL + "/v1/admin/policies/" + url.PathEscape(policyName) +
+		"/statements/" + url.PathEscape(sid) + "/ip-ranges"
+}
+
 func (c *Client) do(req *http.Request) error {
 	resp, err := c.http.Do(req)
 	if err != nil {

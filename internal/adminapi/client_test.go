@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rfancn/file-transfer/internal/config"
+	"github.com/rfancn/file-transfer/internal/protocol"
 )
 
 func TestLogin(t *testing.T) {
@@ -200,6 +202,212 @@ func TestClean(t *testing.T) {
 	}
 	if res.Count != 2 || len(res.Items) != 2 || !res.DryRun {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestSetStatementIPRanges(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	var gotCidrs []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var req protocol.SetStatementIPRangesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		if req.Cidrs != nil {
+			gotCidrs = *req.Cidrs
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{
+			Policy: "ft-user-policy",
+			Sid:    "UploadWrite",
+			Cidrs:  gotCidrs,
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	res, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8", "192.168.1.0/24"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer admin-token" || gotMethod != http.MethodPut {
+		t.Fatalf("auth=%q method=%q", gotAuth, gotMethod)
+	}
+	if gotPath != "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if len(gotCidrs) != 2 || gotCidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs = %v", gotCidrs)
+	}
+	if res.Policy != "ft-user-policy" || res.Sid != "UploadWrite" || len(res.Cidrs) != 2 {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestSetStatementIPRangesClearSendsEmptyArray(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{Policy: "ft-user-policy", Sid: "UploadWrite", Cidrs: []string{}})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"cidrs":[]}` {
+		t.Fatalf("body = %s", gotBody)
+	}
+}
+
+func TestSetStatementIPRangesEscapesPath(t *testing.T) {
+	var gotURI string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft user policy", "Upload Write", []string{"10.0.0.0/8"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotURI, "/v1/admin/policies/ft%20user%20policy/statements/Upload%20Write/ip-ranges") {
+		t.Fatalf("URI = %q", gotURI)
+	}
+}
+
+func TestSetStatementIPRangesError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_cidr", "message": "无效的 IP 网段"})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	res, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"bad"}, "")
+	ae, ok := AsAPIError(err)
+	if !ok || ae.Status != http.StatusBadRequest || ae.Code != "invalid_cidr" {
+		t.Fatalf("err = %#v", err)
+	}
+	if res.Policy != "" || res.Sid != "" || res.Cidrs != nil {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestListPolicySids(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.ListPolicySidsResponse{
+			Policy: "ft-user-policy",
+			Sids:   []string{"UploadWrite", "SharedRead"},
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	sids, err := c.ListPolicySids(context.Background(), "ft-user-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v1/admin/policies/ft-user-policy/sids" || gotAuth != "Bearer admin-token" {
+		t.Fatalf("method=%q path=%q auth=%q", gotMethod, gotPath, gotAuth)
+	}
+	if len(sids) != 2 || sids[0] != "UploadWrite" || sids[1] != "SharedRead" {
+		t.Fatalf("sids = %v", sids)
+	}
+}
+
+func TestGetStatementIPRanges(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{
+			Policy: "ft-user-policy",
+			Sid:    "UploadWrite",
+			Cidrs:  []string{"10.0.0.0/8"},
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	cidrs, err := c.GetStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v1/admin/policies/ft-user-policy/statements/UploadWrite/ip-ranges" || gotAuth != "Bearer admin-token" {
+		t.Fatalf("method=%q path=%q auth=%q", gotMethod, gotPath, gotAuth)
+	}
+	if len(cidrs) != 1 || cidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs = %v", cidrs)
+	}
+}
+
+func TestChangeStatementIPRangesMode(t *testing.T) {
+	var gotMode string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetStatementIPRangesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		gotMode = req.Mode
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.SetStatementIPRangesResponse{Policy: "ft-user-policy", Sid: "UploadWrite"})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	if _, err := c.ChangeStatementIPRanges(context.Background(), "ft-user-policy", "UploadWrite", []string{"10.0.0.0/8"}, "add"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMode != "add" {
+		t.Fatalf("mode = %q", gotMode)
 	}
 }
 

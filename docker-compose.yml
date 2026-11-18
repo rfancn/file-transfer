@@ -8,10 +8,10 @@ services:
     environment:
       # RustFS 与本服务同机部署，默认通过 host-gateway 访问宿主机
       FT_S3_ENDPOINT: ${FT_S3_ENDPOINT:-http://host.docker.internal:9000}
-      # 桶名、共享目录和策略目录在 ./config/ft-server.toml 中配置
+      # 桶名和共享目录在 ./config/ft-server.toml 中配置；策略目录固定为 ./policy
     volumes:
       # 与容器内默认配置路径、日志路径保持一致，无需额外环境变量
       - ./config:/etc/file-transfer
-      - ./policy:/etc/file-transfer/policy:ro
+      - ./policy:/app/policy
       - ./secrets:/app/secrets
       - ./logs:/var/log/file-transfer

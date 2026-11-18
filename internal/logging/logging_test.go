@@ -19,6 +19,15 @@ func TestInfoWritesRotatedLogFile(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	Info("upload", "username", "alice", "path", "outbound/a.txt", "status", 200)
+	Audit(AuditEvent{
+		Action:    "admin.user.add",
+		Actor:     "admin",
+		ActorType: "admin",
+		Target:    "alice",
+		Result:    "success",
+		RequestID: "req-1",
+		RemoteIP:  "127.0.0.1",
+	})
 
 	// SDK 的固定布局：<dir>/<文件名去扩展名>/<文件名>
 	actual := filepath.Join(dir, "ft-server", "ft-server.log")
@@ -31,6 +40,12 @@ func TestInfoWritesRotatedLogFile(t *testing.T) {
 		`"message":"upload"`,
 		`"username":"alice"`,
 		`"path":"outbound/a.txt"`,
+		`"event":"audit"`,
+		`"action":"admin.user.add"`,
+		`"actor":"admin"`,
+		`"target":"alice"`,
+		`"result":"success"`,
+		`"time":`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("日志缺少 %s: %s", want, content)
