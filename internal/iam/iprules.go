@@ -321,16 +321,16 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 		return nil, err
 	}
 
-	policyWriteMu.Lock()
-	defer policyWriteMu.Unlock()
-
-	// 先发现绑定关系，RustFS 列举失败时不修改本地模板。
+	// 先发现绑定关系；只读操作放在写锁外，避免阻塞用户注册。
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	users, groups, err := m.policyAttachments(listCtx, policyName, def.Group)
 	if err != nil {
 		return nil, err
 	}
+
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
 
 	var current []string
 	if mode != IPRangeSet {
@@ -350,12 +350,31 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	}
 
 	// 文件已落盘，后续下发不应因客户端断开而中途取消。
-	applyCtx, applyCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	applyCtx, applyCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer applyCancel()
 	if err := m.replacePolicy(applyCtx, policyName, rendered, users, groups); err != nil {
+		m.restorePolicy(policyName, rendered, users, groups)
 		return nil, fmt.Errorf("%w: %w", ErrApplyFailed, err)
 	}
 	return final, nil
+}
+
+// restorePolicy 在下发失败后尽力重建策略并恢复绑定，避免线上策略缺失。
+func (m *Manager) restorePolicy(policyName string, policy []byte, users, groups []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.replacePolicy(ctx, policyName, policy, users, groups); err == nil {
+		return
+	}
+	if err := m.EnsurePolicy(ctx, policyName, policy); err != nil {
+		return
+	}
+	for _, user := range users {
+		_ = m.Attach(ctx, policyName, user, "")
+	}
+	for _, group := range groups {
+		_ = m.Attach(ctx, policyName, "", group)
+	}
 }
 
 // renderUpdatedPolicy 修改模板、原子写回并更新内存文档。
@@ -423,9 +442,17 @@ func collectPolicyAttachments(policyName, boundGroup string, users map[string]ma
 }
 
 // policyAttachments 返回绑定指定策略的用户和组，并保证绑定组在列表中。
+// 优先使用按策略过滤的 GetPolicyEntities；端点不可用时退回全量枚举。
 func (m *Manager) policyAttachments(ctx context.Context, policyName, group string) ([]string, []string, error) {
 	if m.Admin == nil {
 		return nil, nil, errors.New("RustFS 管理客户端未初始化")
+	}
+	entities, err := m.Admin.GetPolicyEntities(ctx, madmin.PolicyEntitiesQuery{Policy: []string{policyName}})
+	if err == nil {
+		users, groups, found := policyEntitiesFor(entities, policyName, group)
+		if found {
+			return users, groups, nil
+		}
 	}
 	allUsers, err := m.Admin.ListUsers(ctx)
 	if err != nil {
@@ -438,6 +465,35 @@ func (m *Manager) policyAttachments(ctx context.Context, policyName, group strin
 	return collectPolicyAttachments(policyName, group, allUsers, allGroups, func(name string) (*madmin.GroupDesc, error) {
 		return m.Admin.GetGroupDescription(ctx, name)
 	})
+}
+
+func policyEntitiesFor(entities madmin.PolicyEntitiesResult, policyName, boundGroup string) ([]string, []string, bool) {
+	var users, groups []string
+	found := false
+	for _, mapping := range entities.PolicyMappings {
+		if mapping.Policy != policyName {
+			continue
+		}
+		found = true
+		users = append(users, mapping.Users...)
+		groups = append(groups, mapping.Groups...)
+	}
+	if !found {
+		return nil, nil, false
+	}
+	if !containsString(groups, boundGroup) {
+		groups = append(groups, boundGroup)
+	}
+	return users, groups, true
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 // writeFileAtomic 先写同目录临时文件再 rename，避免中途失败留下半个文件。

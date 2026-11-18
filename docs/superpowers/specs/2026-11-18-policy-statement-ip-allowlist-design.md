@@ -162,27 +162,26 @@ Content-Type: application/json
 ### 6.1 `internal/iam`
 
 - `policies.go`
-  - 新增策略名到模板文件的映射（只含三个组策略），以及策略名到绑定组的映射；
+  - 新增 `policyDefs` 有序表（组/策略/模板文件），派生可编辑策略、组校验与模板查找；
   - 新增纯函数 `SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, error)`：
     解析策略、按 Sid 定位语句、合并/清除条件、重新序列化；不涉及文件或 RustFS；
-  - 新增 `NormalizeCIDRs([]string) ([]string, error)`；
-  - 导出 `RenderPolicy`（现有 `renderPolicy` 的包装），供接口修改模板后重新渲染；
+  - 新增 `NormalizeCIDRs([]string) ([]string, error)`（单 IP/CIDR，单次输入 ≤100 条）；
   - 定义 `ErrUnsupportedPolicy`、`ErrServicePolicy`、`ErrSIDNotFound`、`ErrStatementNotAllow`、
     `ErrInvalidCIDR`、`ErrInvalidPolicy`、`ErrPolicyWrite` 哨兵错误。
 - `iam.go`
-  - `Manager` 增加 `PolicyDir string` 字段；
-  - 新增 `SetStatementIPRanges(ctx, policyName, sid string, cidrs []string, mode string, opts PolicyOptions) ([]string, error)`：
-    1. 校验策略名、`mode` 并规范化 IP/网段；`mode` 为空时按 `set` 处理；
-    2. 获取包级 `policyWriteMu`（与 `ReplacePolicy` 共享），串行化所有策略写操作；
-    3. 先找出绑定该策略的用户和组（`ListUsers` + `ListGroups`/`GetGroupDescription`），
-       支持逗号分隔的多策略字段；组描述读取失败直接返回错误，不静默跳过；
-    4. `add`/`remove` 时先通过 `StatementIPRanges` 读取当前列表，计算最终列表；
-    5. 读取模板文件，调用 `SetStatementSourceIP`；
-    6. 用 `PolicyOptions` 渲染并校验 JSON；
-    7. 原子写回模板文件（同目录临时文件 + `rename`，保留原权限）；
-    8. 更新内存中的渲染结果（见 6.2）；
-    9. 用脱离请求取消的 30 秒上下文调用内部 `replacePolicy` 立即下发；
-       失败返回 `ErrApplyFailed`，表示规则已持久化但未下发；
+  - `Manager` 增加 `PolicyDir string`、`Options PolicyOptions` 字段；
+  - 新增 `editableDocument` 统一策略/Sid 守卫；
+  - 新增 `SetStatementIPRanges(ctx, policyName, sid string, cidrs []string, mode string) ([]string, error)`：
+    1. 校验 `mode`、规范化输入、内存校验策略与 Sid；`mode` 为空时按 `set` 处理；
+    2. 在写锁外发现绑定关系：优先 `GetPolicyEntities`，不可用时回退
+       `ListUsers` + `ListGroups`/`GetGroupDescription`；
+    3. 获取包级 `policyWriteMu`（与 `ReplacePolicy` 共享），`add`/`remove` 读取当前列表并计算最终列表；
+    4. 读取模板文件，调用 `SetStatementSourceIP`；
+    5. 用 `Manager.Options` 渲染并校验 JSON；
+    6. 原子写回模板文件（同目录临时文件 + `rename`，保留原权限）；
+    7. 更新内存中的渲染结果（见 6.2）；
+    8. 用脱离请求取消的 2 分钟上下文调用内部 `replacePolicy` 立即下发；
+       失败时 `restorePolicy` 尽力重建策略并恢复绑定，返回 `ErrApplyFailed`；
     10. 返回修改后的完整列表。
   - 新增 `StatementIPRanges(policyName, sid string) ([]string, error)`：从内存策略文档读取指定 Allow 语句的 `aws:SourceIp`，用于查看和 `add`/`remove` 计算。
   - `ReplacePolicy` 改为获取 `policyWriteMu` 后调用内部 `replacePolicy`，

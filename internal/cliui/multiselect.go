@@ -44,7 +44,14 @@ func MultiSelect(label string, items []MultiItem) (int, error) {
 	fmt.Print("\033[?25l")
 	defer fmt.Print("\033[?25h")
 
-	m := &multiSelect{label: label, items: items}
+	height := stdoutHeight() - 3
+	if height < 1 {
+		height = 1
+	}
+	if height > len(items) {
+		height = len(items)
+	}
+	m := &multiSelect{label: label, items: items, height: height}
 	defer m.clear()
 	m.render(true)
 	for {
@@ -59,9 +66,11 @@ func MultiSelect(label string, items []MultiItem) (int, error) {
 			} else {
 				m.cursor--
 			}
+			m.ensureVisible()
 			m.render(false)
 		case keyDown:
 			m.cursor = (m.cursor + 1) % len(items)
+			m.ensureVisible()
 			m.render(false)
 		case ' ':
 			if items[m.cursor].Selectable {
@@ -84,6 +93,24 @@ type multiSelect struct {
 	label  string
 	items  []MultiItem
 	cursor int
+	offset int
+	height int
+}
+
+// ensureVisible 调整窗口，使光标始终在可视范围内。
+func (m *multiSelect) ensureVisible() {
+	if m.height <= 0 {
+		return
+	}
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+m.height {
+		m.offset = m.cursor - m.height + 1
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
 }
 
 func (m *multiSelect) render(first bool) {
@@ -97,7 +124,7 @@ func (m *multiSelect) render(first bool) {
 }
 
 func (m *multiSelect) clear() {
-	lines := len(m.items) + 2
+	lines := m.height + 2
 	fmt.Fprintf(os.Stdout, "\033[%dA", lines)
 	for i := 0; i < lines; i++ {
 		fmt.Fprint(os.Stdout, "\033[2K\r")
@@ -115,7 +142,12 @@ func (m *multiSelect) lines() []string {
 		width = 20
 	}
 	lines := []string{truncateDisplayWidth("? "+m.label, width)}
-	for i, item := range m.items {
+	end := m.offset + m.height
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+	for i := m.offset; i < end; i++ {
+		item := m.items[i]
 		prefix := "  "
 		if i == m.cursor {
 			prefix = "▸ "
@@ -153,6 +185,13 @@ func stdoutWidth() int {
 		return w
 	}
 	return 120
+}
+
+func stdoutHeight() int {
+	if _, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && h > 0 {
+		return h
+	}
+	return 24
 }
 
 func readKey(f *os.File) (rune, error) {
