@@ -53,6 +53,12 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 		code   string
 	}{
 		{"missing cidrs", "ft-user-policy", "UploadWrite", `{}`, http.StatusBadRequest, "invalid_request"},
+		{"null cidrs", "ft-user-policy", "UploadWrite", `{"cidrs":null}`, http.StatusBadRequest, "invalid_request"},
+		{"malformed json", "ft-user-policy", "UploadWrite", `{"cidrs":`, http.StatusBadRequest, "invalid_request"},
+		{"empty body", "ft-user-policy", "UploadWrite", ``, http.StatusBadRequest, "invalid_request"},
+		// 空数组表示清除，应通过绑定与 nil 校验并进入 IAM 层；测试中 Admin 为 nil，
+		// 因此最终返回 rustfs_unavailable，而不是 invalid_request。
+		{"empty cidrs reaches iam", "ft-user-policy", "UploadWrite", `{"cidrs":[]}`, http.StatusBadGateway, "rustfs_unavailable"},
 		{"invalid cidr", "ft-user-policy", "UploadWrite", `{"cidrs":["bad"]}`, http.StatusBadRequest, "invalid_cidr"},
 		{"service policy", "ft-admin-policy", "UploadWrite", `{"cidrs":["10.0.0.0/8"]}`, http.StatusForbidden, "service_policy"},
 		{"unsupported policy", "custom-policy", "UploadWrite", `{"cidrs":["10.0.0.0/8"]}`, http.StatusBadRequest, "unsupported_policy"},

@@ -253,7 +253,7 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
 	var req protocol.SetStatementIPRangesRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.Cidrs == nil {
-		response.Err(c, http.StatusBadRequest, "invalid_request", "cidrs 不能为空")
+		response.Err(c, http.StatusBadRequest, "invalid_request", "请求参数错误")
 		return
 	}
 	policyName := c.Param("name")
@@ -278,6 +278,12 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 		RequestID: c.GetString("request_id"),
 		RemoteIP:  c.ClientIP(),
 	})
+	logging.Info("admin policy ip set",
+		"policy", policyName,
+		"sid", sid,
+		"cidrs", cidrs,
+		"actor", c.GetString("admin"),
+		"request_id", c.GetString("request_id"))
 	response.JSON(c, http.StatusOK, protocol.SetStatementIPRangesResponse{
 		Policy: policyName,
 		Sid:    sid,
