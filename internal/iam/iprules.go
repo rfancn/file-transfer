@@ -1,15 +1,11 @@
 package iam
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 )
 
 const maxCIDRs = 100
@@ -64,7 +60,7 @@ func NormalizeCIDRs(cidrs []string) ([]string, error) {
 		}
 		prefix, err := netip.ParsePrefix(value)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s", ErrInvalidCIDR, value)
+			return nil, fmt.Errorf("%w: %q", ErrInvalidCIDR, value)
 		}
 		normalized := prefix.Masked().String()
 		if _, ok := seen[normalized]; ok {
@@ -76,11 +72,81 @@ func NormalizeCIDRs(cidrs []string) ([]string, error) {
 	return out, nil
 }
 
-// 后续任务会在这里补充 SetStatementSourceIP 与模板写回逻辑；先保留占位导入。
-var (
-	_ = context.Background
-	_ = json.Marshal
-	_ = os.ReadFile
-	_ = filepath.Join
-	_ = sync.Mutex{}
-)
+// SetStatementSourceIP 为指定 Sid 的 Allow 语句设置或清除 aws:SourceIp 条件。
+// cidrs 为空时清除条件。
+func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(policy, &doc); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	rawStatements, ok := doc["Statement"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: Statement 必须是数组", ErrInvalidPolicy)
+	}
+	matches := 0
+	for _, raw := range rawStatements {
+		statement, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%w: Statement 项必须是对象", ErrInvalidPolicy)
+		}
+		statementSID, _ := statement["Sid"].(string)
+		if statementSID != sid {
+			continue
+		}
+		matches++
+		effect, _ := statement["Effect"].(string)
+		if !strings.EqualFold(effect, "Allow") {
+			return nil, ErrStatementNotAllow
+		}
+		if err := setSourceIPCondition(statement, cidrs); err != nil {
+			return nil, err
+		}
+	}
+	if matches == 0 {
+		return nil, ErrSIDNotFound
+	}
+	if matches > 1 {
+		return nil, fmt.Errorf("%w: 重复 Sid %q", ErrInvalidPolicy, sid)
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	return append(out, '\n'), nil
+}
+
+func setSourceIPCondition(statement map[string]any, cidrs []string) error {
+	condition := map[string]any{}
+	if raw, ok := statement["Condition"]; ok {
+		condition, ok = raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: Condition 必须是对象", ErrInvalidPolicy)
+		}
+	}
+	ipAddress := map[string]any{}
+	if raw, ok := condition["IpAddress"]; ok {
+		ipAddress, ok = raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: IpAddress 必须是对象", ErrInvalidPolicy)
+		}
+	}
+	if len(cidrs) == 0 {
+		delete(ipAddress, "aws:SourceIp")
+		if len(ipAddress) == 0 {
+			delete(condition, "IpAddress")
+		}
+	} else {
+		values := make([]any, len(cidrs))
+		for i, cidr := range cidrs {
+			values[i] = cidr
+		}
+		ipAddress["aws:SourceIp"] = values
+		condition["IpAddress"] = ipAddress
+	}
+	if len(condition) == 0 {
+		delete(statement, "Condition")
+		return nil
+	}
+	statement["Condition"] = condition
+	return nil
+}
