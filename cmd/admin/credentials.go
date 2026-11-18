@@ -90,10 +90,27 @@ func promptPassword() string {
 	return value
 }
 
+// promptAdminUsername 读取管理员用户名。
+// 交互终端使用普通行输入，避免 promptui 在回车时重绘提示造成“重复询问”。
+func promptAdminUsername() (string, bool) {
+	if !cliui.IsInteractive() {
+		return promptCredential("ft-server 管理员用户名 [admin]", false)
+	}
+	fmt.Print("ft-server 管理员用户名 [admin]: ")
+	value, err := cliui.ReadLine()
+	if errors.Is(err, cliui.ErrCanceled) {
+		return "", false
+	}
+	if err != nil {
+		log.Fatalf("读取 ft-server 管理员用户名 失败: %v", err)
+	}
+	return strings.TrimSpace(value), true
+}
+
 // serverAdminCreds 返回 ft-server 管理员凭证：命令行参数优先，否则交互输入。
 func serverAdminCreds(user, pass string) (string, string) {
 	if user = strings.TrimSpace(user); user == "" {
-		if value, ok := promptCredential("ft-server 管理员用户名 [admin]", false); ok && value != "" {
+		if value, ok := promptAdminUsername(); ok && value != "" {
 			user = value
 		} else if !ok && cliui.IsInteractive() {
 			os.Exit(130)
