@@ -21,6 +21,7 @@ type cleanResponse struct {
 
 func (h *Handler) AdminClean(c *gin.Context) {
 	dir := c.Param("dir")
+	c.Set("audit_target", dir)
 	switch dir {
 	case "inbound", "outbound", "upload", "incomplete":
 	default:

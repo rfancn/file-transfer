@@ -93,6 +93,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	c.Set("audit_target", username)
 	if err := auth.ValidateUsername(username); err != nil {
 		response.Err(c, http.StatusBadRequest, "invalid_username", err.Error())
 		return
@@ -159,6 +160,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 			RequestID: c.GetString("request_id"),
 			RemoteIP:  c.ClientIP(),
 		})
+		c.Set("audit_logged", true)
 	}
 	response.JSON(c, http.StatusCreated, protocol.AddUserResponse{Username: username, Password: password})
 }
@@ -166,6 +168,7 @@ func (h *Handler) AdminAddUser(c *gin.Context) {
 // AdminResetPassword 为已存在的用户生成并设置新的 8 位密码。
 func (h *Handler) AdminResetPassword(c *gin.Context) {
 	username := c.Param("username")
+	c.Set("audit_target", username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能重置密码")
 		return
@@ -227,6 +230,7 @@ func (h *Handler) AdminListUsers(c *gin.Context) {
 // AdminDelete 删除用户及其全部数据。
 func (h *Handler) AdminDelete(c *gin.Context) {
 	username := c.Param("username")
+	c.Set("audit_target", username)
 	if iam.IsSystemUser(username) {
 		response.Err(c, http.StatusForbidden, "system_user", "系统用户不能删除")
 		return
@@ -270,6 +274,7 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	}
 	policyName := c.Param("name")
 	sid := c.Param("sid")
+	c.Set("audit_target", policyName+"/"+sid)
 	opts := iam.PolicyOptions{
 		HomeBucket:   h.Cfg.S3.HomeBucket,
 		SharedBucket: h.Cfg.S3.SharedBucket,
@@ -290,6 +295,7 @@ func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 		RequestID: c.GetString("request_id"),
 		RemoteIP:  c.ClientIP(),
 	})
+	c.Set("audit_logged", true)
 	logging.Info("admin policy ip set",
 		"policy", policyName,
 		"sid", sid,
