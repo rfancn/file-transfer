@@ -234,10 +234,11 @@ make build
 > - `ft-clean.sh` 的凭据文件改为 `ADMIN_USER` / `ADMIN_PASSWORD`，不再读取 `FT_ADMIN_USER` / `FT_ADMIN_PASSWORD` / `FT_ADMIN_ENV`。
 > - `docker-compose.yml` 的镜像 tag 和宿主端口改为固定值，需要修改时直接编辑该文件。
 > - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
-> - 旧版本（`e4ed5e1` 之前）为每个用户创建并绑定了 `ft-user-<username>-policy`。升级后这些策略可能仍绑定在现有用户上，且不包含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，这些用户仍可能通过旧策略绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
+> - `v0.0.1` 及更早版本为每个用户创建并绑定了 `ft-user-<username>-policy`；`v0.0.2` 起改用组策略，不再创建新的单用户策略，但不会自动解绑从旧版本升级上来的策略。这些旧策略不含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，仍绑定旧策略的用户可能绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
+> - 解绑/删除旧策略可使用 RustFS Console，或使用 `mc admin policy detach <alias> ft-user-<username>-policy --user <username>` 与 `mc admin policy remove <alias> ft-user-<username>-policy`；删除前请确认没有用户或组仍引用。`ft-admin` 目前没有策略解绑/删除命令。
 > - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`，去掉 policy 挂载的 `:ro`，否则调用白名单接口会返回 `policy_write_failed`。
 > - 将新版本带 `Sid` 的 `policy/*.json` 合并到服务端策略目录后再重启并执行 `ft-admin init`；旧模板缺少 Sid 时接口会返回 `sid_not_found`，仅执行 `ft-admin init` 不会补上 Sid。
-> - 策略目录必须由运行 `ft-server` 的用户可写（非 Docker / rootless 部署请检查属主和权限）。
+> - 如需使用 IP 白名单，策略目录必须由运行 `ft-server` 的用户可写（非 Docker / rootless 部署请检查属主和权限）。
 
 首次启动时：
 
@@ -302,7 +303,7 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - 手工修改 `policy/*.json` 后，需要重启 `ft-server` 并执行 `ft-admin init` 使策略在 RustFS 生效。
 - 通过管理接口或 `ft-admin policy ip` 修改时，规则会立即下发到 RustFS，无需重启。
 - 使用 IP 白名单功能时，运行 `ft-server` 的用户必须对服务端 `policy/` 目录有写权限；不使用该功能时只读即可。
-- 升级时如果整体覆盖 `policy/*.json`，已设置的 IP 白名单会丢失；升级前请保留或合并这些文件。
+- 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
 
 > **注意：升级前请备份 `policy/`。** 整体覆盖 `policy/*.json` 会丢失已设置的 IP 白名单：
 >
@@ -311,8 +312,6 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 > ```
 >
 > 升级后合并新模板时保留 `aws:SourceIp` 条件，确认白名单仍然存在。
-
-- 用户组只能列出自己的 `inbound`/`outbound`/`upload` 前缀；Cyberduck 书签的路径应设置为 `home/<username>`，直接连接 home 桶根目录会被拒绝。
 
 ##### 策略语句 IP 白名单
 
@@ -344,7 +343,7 @@ Content-Type: application/json
 | 400 | `invalid_cidr` | 网段格式非法 |
 | 400 | `unsupported_policy` | 策略不在允许范围 |
 | 403 | `service_policy` | 不允许修改服务身份策略 |
-| 400 | `sid_not_found` | 策略中不存在该 Sid |
+| 400 | `sid_not_found` | 策略中不存在该 Sid（模板可能缺少 Sid，需先合并新模板） |
 | 400 | `statement_not_allow` | 目标语句不是 Allow |
 | 500 | `invalid_policy` | 策略内容无效 |
 | 500 | `policy_write_failed` | 策略目录不可写 |
@@ -353,14 +352,14 @@ Content-Type: application/json
 
 - 只允许 `ft-user-policy`、`ft-operator-policy`、`shared-operator-policy`；
 - `cidrs: []` 表示清除该语句的 IP 白名单；
-- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff，变更后请提交或备份；
+- 接口会重新序列化整篇模板（键排序、两空格缩进），可能产生格式 diff；变更后请备份到仓库外，或仅在受控分支中提交，并注意区分不同环境的网段；
 - 通过管理接口或 `ft-admin policy ip` 修改时立即下发到 RustFS，无需重启；
 - 若接口返回 `apply_failed`，表示模板已更新但下发失败，重试本接口或执行 `ft-admin init` 即可。
 
 > **注意**
 >
-> - `0.0.0.0/0` 或 `::/0` 等同允许所有地址，等于关闭该语句的 IP 限制。
-> - 网段设置错误会导致该语句的权限对所有用户失效（例如 `UploadWrite` 设错会导致所有用户无法上传）。
+> - `0.0.0.0/0` 放行所有 IPv4，`::/0` 放行所有 IPv6；两者同时设置等于完全关闭该语句的 IP 限制。
+> - 网段设置错误会导致该语句白名单外的用户无法访问（例如 `UploadWrite` 设错会导致白名单外用户无法上传）。
 > - 管理接口本身不受这些 S3 策略限制，仍可通过 `ft-admin policy ip ... --clear` 或重新设置正确网段恢复。
 > - 设置后请分别从白名单内、外地址验证。
 > - 该功能依赖 RustFS 对 `Sid` 和 `aws:SourceIp` 的支持，请先在目标版本上实测。
