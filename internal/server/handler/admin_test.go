@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rfancn/file-transfer/internal/iam"
+	"github.com/rfancn/file-transfer/internal/protocol"
 	"github.com/rfancn/file-transfer/internal/server/app"
 )
 
@@ -115,5 +117,28 @@ func TestAdminSetStatementIPRangesRejects(t *testing.T) {
 				t.Fatalf("body = %s", w.Body.String())
 			}
 		})
+	}
+}
+
+func TestAdminListPolicySids(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	doc := []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"UploadWrite","Effect":"Allow"},{"Sid":"DenyOne","Effect":"Deny"}]}`)
+	h := &Handler{App: &app.App{IAM: &iam.Manager{Policies: &iam.Policies{Group: doc}}}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/admin/policies/ft-user-policy/sids", nil)
+	c.Params = gin.Params{{Key: "name", Value: iam.UserGroupPol}}
+
+	h.AdminListPolicySids(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var out protocol.ListPolicySidsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Policy != iam.UserGroupPol || len(out.Sids) != 1 || out.Sids[0] != "UploadWrite" {
+		t.Fatalf("out = %+v", out)
 	}
 }

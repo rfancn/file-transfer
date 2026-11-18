@@ -95,3 +95,8 @@ type SetStatementIPRangesResponse struct {
 	Sid    string   `json:"sid"`
 	Cidrs  []string `json:"cidrs"`
 }
+
+type ListPolicySidsResponse struct {
+	Policy string   `json:"policy"`
+	Sids   []string `json:"sids"`
+}

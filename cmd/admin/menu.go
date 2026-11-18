@@ -93,7 +93,9 @@ func menu(cfg config.AdminConfig, ac *adminapi.Client) {
 		case 5:
 			runPolicyIPMenu(ac)
 		case 6:
-			runInit(&cfg, ac, "", "")
+			if runInit(&cfg, ac, "", "") {
+				return
+			}
 		case 7:
 			return
 		}

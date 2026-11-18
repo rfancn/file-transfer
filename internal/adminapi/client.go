@@ -201,6 +201,21 @@ func (c *Client) Clean(ctx context.Context, dir string, days int, dryRun bool) (
 	return out, nil
 }
 
+// ListPolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid。
+func (c *Client) ListPolicySids(ctx context.Context, policyName string) ([]string, error) {
+	var out protocol.ListPolicySidsResponse
+	u := c.baseURL + "/v1/admin/policies/" + url.PathEscape(policyName) + "/sids"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return out.Sids, nil
+}
+
 // SetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
 func (c *Client) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string) (protocol.SetStatementIPRangesResponse, error) {
 	var out protocol.SetStatementIPRangesResponse

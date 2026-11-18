@@ -322,6 +322,37 @@ func TestSetStatementIPRangesError(t *testing.T) {
 	}
 }
 
+func TestListPolicySids(t *testing.T) {
+	var gotAuth, gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.ListPolicySidsResponse{
+			Policy: "ft-user-policy",
+			Sids:   []string{"UploadWrite", "SharedRead"},
+		})
+	}))
+	defer ts.Close()
+
+	c, err := New(config.ClientSection{URL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.token = "admin-token"
+	sids, err := c.ListPolicySids(context.Background(), "ft-user-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v1/admin/policies/ft-user-policy/sids" || gotAuth != "Bearer admin-token" {
+		t.Fatalf("method=%q path=%q auth=%q", gotMethod, gotPath, gotAuth)
+	}
+	if len(sids) != 2 || sids[0] != "UploadWrite" || sids[1] != "SharedRead" {
+		t.Fatalf("sids = %v", sids)
+	}
+}
+
 func TestUnauthorizedError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

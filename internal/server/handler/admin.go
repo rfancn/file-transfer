@@ -248,6 +248,18 @@ func (h *Handler) AdminDelete(c *gin.Context) {
 	response.JSON(c, http.StatusOK, map[string]any{"deleted": true, "objects": n})
 }
 
+// AdminListPolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid。
+func (h *Handler) AdminListPolicySids(c *gin.Context) {
+	policyName := c.Param("name")
+	sids, err := h.IAM.PolicySids(policyName)
+	if err != nil {
+		logging.Error("admin list policy sids", "policy", policyName, "err", err)
+		writePolicyError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, protocol.ListPolicySidsResponse{Policy: policyName, Sids: sids})
+}
+
 // AdminSetStatementIPRanges 设置或清除指定策略语句的 IP 白名单。
 func (h *Handler) AdminSetStatementIPRanges(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)

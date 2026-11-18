@@ -313,6 +313,19 @@ Content-Type: application/json
 { "policy": "ft-user-policy", "sid": "UploadWrite", "cidrs": ["10.0.0.0/8"] }
 ```
 
+读取 Sid 列表（`ft-admin` 菜单使用）：
+
+```http
+GET /v1/admin/policies/:name/sids
+Authorization: Bearer <admin token>
+```
+
+返回该策略中所有 `Allow` 语句的 `Sid`，按模板顺序排列：
+
+```json
+{ "policy": "ft-user-policy", "sids": ["HomeBucketMetadata", "ListOwnDirs", "UploadWrite"] }
+```
+
 错误码：
 
 | HTTP | code | 说明 |
@@ -353,7 +366,8 @@ ft-admin policy ip ft-user-policy UploadWrite --clear
 - `--clear` 不能与网段参数同时使用；
 - 非交互执行时必须提供网段或 `--clear`；
 - 单个位置参数可用逗号分隔多个网段；
-- `--yes` 跳过确认。
+- `--yes` 跳过确认；
+- 交互菜单会先读取该策略的 Sid 列表，再用菜单选择要设置的语句。
 
 常用 Sid：
 
@@ -394,7 +408,7 @@ ft-admin init --access-key <AK> --secret-key-file /etc/file-transfer/rustfs-secr
 - `ft-operator-group`：摆渡操作员组，绑定所有用户 `inbound`/`outbound` 的策略；
 - `shared-operator-group`：共享操作员组，绑定共享桶 list/get/put/delete 策略。
 
-初始化**不会创建默认操作员或共享操作员账号**。账号通过 `ft-admin user add` 创建时选择对应组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。
+初始化**不会创建默认操作员或共享操作员账号**。账号通过 `ft-admin user add` 创建时选择对应组，并需要二次确认。首次初始化完成后 `ft-server` 会自动重启加载完整配置，因此 systemd 需要配置 `Restart=always`。在交互菜单中选择“初始化”成功后，`ft-admin` 会退出；`ft-admin init` 子命令完成后也会退出。
 
 ### 4. 创建用户
 
@@ -504,7 +518,7 @@ sudo ./script/install.sh http://ft-server:8080
 | `ft-admin clean [目录] [--days N] [--dry-run] [--yes]` | 清理数据或未完成分片 |
 | `ft-admin policy ip <policy> <sid> [cidr...] [--clear] [--yes]` | 设置策略语句的 IP 白名单 |
 
-无子命令时进入交互菜单：添加用户、删除用户、重置用户密码、列出用户、清理数据、设置策略 IP 白名单、初始化、退出。
+无子命令时进入交互菜单：添加用户、删除用户、重置用户密码、列出用户、清理数据、设置策略 IP 白名单（Sid 使用菜单选择）、初始化、退出。
 
 ### 清理规则
 

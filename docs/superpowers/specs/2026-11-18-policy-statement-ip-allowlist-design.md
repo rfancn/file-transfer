@@ -76,6 +76,14 @@ Content-Type: application/json
 所有管理接口沿用现有 `AdminAuth` + `RequireReady` 中间件。修改成功后写入审计日志，
 `Action = "admin.policy.ip.set"`，`Target = "<policy>/<sid>"`。
 
+### 3.4 Sid 列表
+
+`GET /v1/admin/policies/:name/sids` 返回该策略中所有 `Allow` 语句的 Sid，按模板顺序排列，供 `ft-admin` 菜单选择：
+
+```json
+{ "policy": "ft-user-policy", "sids": ["HomeBucketMetadata", "ListOwnDirs", "UploadWrite"] }
+```
+
 ## 4. 策略条件语义
 
 对 `Sid` 匹配且 `Effect == "Allow"` 的语句，合并以下条件：
@@ -224,7 +232,7 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
 
 ### 7.2 菜单
 
-主菜单新增“设置策略 IP 白名单”，依次提示策略（三个组策略选择）、Sid、网段。
+主菜单新增“设置策略 IP 白名单”，依次提示策略（三个组策略选择）、从 `GET /sids` 读取的 Sid 菜单、网段。
 
 ### 7.3 客户端
 

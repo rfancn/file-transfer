@@ -54,6 +54,45 @@ func IsServicePolicy(policyName string) bool {
 	return policyName == DataPolicy || policyName == ServerAdminPol
 }
 
+// PolicySids 返回策略中可设置 IP 白名单的 Allow 语句 Sid（按模板顺序）。
+func (m *Manager) PolicySids(policyName string) ([]string, error) {
+	if IsServicePolicy(policyName) {
+		return nil, ErrServicePolicy
+	}
+	if !IsEditablePolicy(policyName) {
+		return nil, ErrUnsupportedPolicy
+	}
+	if m.Policies == nil {
+		return nil, ErrPolicyRead
+	}
+	doc, err := m.Policies.Document(policyName)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Statement []struct {
+			Sid    string `json:"Sid"`
+			Effect string `json:"Effect"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	sids := make([]string, 0, len(parsed.Statement))
+	seen := make(map[string]struct{}, len(parsed.Statement))
+	for _, st := range parsed.Statement {
+		if st.Sid == "" || st.Effect != "Allow" {
+			continue
+		}
+		if _, ok := seen[st.Sid]; ok {
+			return nil, fmt.Errorf("%w: 重复 Sid %q", ErrInvalidPolicy, st.Sid)
+		}
+		seen[st.Sid] = struct{}{}
+		sids = append(sids, st.Sid)
+	}
+	return sids, nil
+}
+
 // NormalizeCIDRs 校验并规范化网段列表，去掉重复项。
 func NormalizeCIDRs(cidrs []string) ([]string, error) {
 	if len(cidrs) > maxCIDRs {

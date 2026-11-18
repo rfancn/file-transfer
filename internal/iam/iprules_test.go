@@ -513,3 +513,41 @@ func TestSetStatementIPRangesValidatesCIDRBeforeAttachments(t *testing.T) {
 		t.Fatal("非法 CIDR 不应修改模板")
 	}
 }
+
+func TestPolicySids(t *testing.T) {
+	m := &Manager{Policies: loadTestPolicies(t)}
+	sids, err := m.PolicySids(UserGroupPol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"HomeBucketMetadata", "ListOwnDirs", "UploadWrite",
+		"SharedBucketMetadata", "SharedRootList", "SharedDirList", "SharedRead",
+	}
+	if len(sids) != len(want) {
+		t.Fatalf("sids = %v, want %v", sids, want)
+	}
+	for i := range want {
+		if sids[i] != want[i] {
+			t.Fatalf("sids = %v, want %v", sids, want)
+		}
+	}
+
+	if _, err := m.PolicySids(DataPolicy); !errors.Is(err, ErrServicePolicy) {
+		t.Fatalf("service policy err = %v", err)
+	}
+	if _, err := m.PolicySids("custom-policy"); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("unsupported policy err = %v", err)
+	}
+	if _, err := (&Manager{}).PolicySids(UserGroupPol); !errors.Is(err, ErrPolicyRead) {
+		t.Fatalf("nil policies err = %v", err)
+	}
+}
+
+func TestPolicySidsRejectsDuplicate(t *testing.T) {
+	p := &Policies{Group: []byte(`{"Version":"2012-10-17","Statement":[{"Sid":"A","Effect":"Allow"},{"Sid":"A","Effect":"Allow"}]}`)}
+	m := &Manager{Policies: p}
+	if _, err := m.PolicySids(UserGroupPol); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("err = %v, want ErrInvalidPolicy", err)
+	}
+}

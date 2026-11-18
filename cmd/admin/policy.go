@@ -149,14 +149,26 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 	if idx < 0 || idx >= len(names) {
 		return
 	}
-	sid, err := cliui.Input("语句 Sid（例如 UploadWrite）", "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sids, err := ac.ListPolicySids(ctx, names[idx])
+	cancel()
+	if err != nil {
+		failf("获取策略语句失败: %v", err)
+		return
+	}
+	if len(sids) == 0 {
+		failf("策略 %s 没有可设置的 Allow 语句", names[idx])
+		return
+	}
+	sidIdx, err := cliui.Select("选择语句 Sid", sids)
 	if canceledByUser(err) {
 		return
 	}
 	if err != nil {
-		failf("读取 Sid 失败: %v", err)
+		failf("选择语句失败: %v", err)
 		return
 	}
+	sid := sids[sidIdx]
 	value, err := cliui.Input("IP 网段（逗号分隔，留空表示清除）", "", nil)
 	if canceledByUser(err) {
 		return
