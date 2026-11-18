@@ -81,6 +81,7 @@ type Manager struct {
 	S3            *s3.Manager
 	PlaceholderS3 *s3.Manager
 	Policies      *Policies
+	PolicyDir     string
 	Bucket        string
 }
 

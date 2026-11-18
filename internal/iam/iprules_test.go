@@ -1,8 +1,11 @@
 package iam
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -309,5 +312,116 @@ func TestSetStatementSourceIPNullCondition(t *testing.T) {
 	got := sourceIPs(t, parseStatements(t, updated)["X"])
 	if len(got) != 1 || got[0] != "10.0.0.0/8" {
 		t.Fatalf("aws:SourceIp = %v", got)
+	}
+}
+
+func setupPolicyDir(t *testing.T) (string, PolicyOptions) {
+	t.Helper()
+	dir := t.TempDir()
+	writeValidPolicies(t, dir, "")
+	group := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UploadWrite",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::home/${aws:username}/upload/*"]
+    },
+    {
+      "Sid": "SharedRead",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ["{{SHARED_DIR_OBJECT_ARNS}}"]
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(dir, policyUserGroupFile), []byte(group), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, testPolicyOptions()
+}
+
+func TestRenderUpdatedPolicyWritesFileAndMemory(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{PolicyDir: dir, Policies: policies}
+
+	normalized, rendered, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"10.0.0.1/8", "10.0.0.0/8"}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized) != 1 || normalized[0] != "10.0.0.0/8" {
+		t.Fatalf("normalized = %v", normalized)
+	}
+	if got := sourceIPs(t, parseStatements(t, rendered)["UploadWrite"]); len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Fatalf("rendered aws:SourceIp = %v", got)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(dir, policyUserGroupFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), `"aws:SourceIp"`) {
+		t.Fatalf("模板文件未写入条件: %s", onDisk)
+	}
+	mem, err := policies.Document(UserGroupPol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mem), `"aws:SourceIp"`) {
+		t.Fatalf("内存文档未更新: %s", mem)
+	}
+	if strings.Contains(string(mem), "{{") {
+		t.Fatalf("内存文档未渲染: %s", mem)
+	}
+}
+
+func TestRenderUpdatedPolicyClears(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{PolicyDir: dir, Policies: policies}
+	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"10.0.0.0/8"}, opts); err != nil {
+		t.Fatal(err)
+	}
+	_, rendered, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := parseStatements(t, rendered)["UploadWrite"]
+	if st.Condition != nil {
+		t.Fatalf("Condition 未清除: %#v", st.Condition)
+	}
+}
+
+func TestRenderUpdatedPolicyRejects(t *testing.T) {
+	dir, opts := setupPolicyDir(t)
+	policies, err := LoadPolicies(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{PolicyDir: dir, Policies: policies}
+	if _, _, err := m.renderUpdatedPolicy(DataPolicy, "UploadWrite", nil, opts); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "Missing", nil, opts); !errors.Is(err, ErrSIDNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, err := m.renderUpdatedPolicy(UserGroupPol, "UploadWrite", []string{"bad"}, opts); !errors.Is(err, ErrInvalidCIDR) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSetStatementIPRangesRejectsServicePolicy(t *testing.T) {
+	m := &Manager{}
+	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, PolicyOptions{})
+	if !errors.Is(err, ErrServicePolicy) {
+		t.Fatalf("err = %v", err)
 	}
 }

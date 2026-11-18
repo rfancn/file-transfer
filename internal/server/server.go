@@ -52,6 +52,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 		return nil, fmt.Errorf("加载 IAM 策略: %w", err)
 	}
 	im.Policies = policies
+	im.PolicyDir = policyDir
 	im.PlaceholderS3 = data
 	adminPath := adminuser.Path()
 	admins, initialPassword, err := adminuser.LoadOrCreate(adminPath)

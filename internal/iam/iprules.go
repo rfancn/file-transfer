@@ -1,11 +1,15 @@
 package iam
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const maxCIDRs = 100
@@ -126,6 +130,131 @@ func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, er
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
 	}
 	return append(out, '\n'), nil
+}
+
+// policyUpdateMu 串行化策略模板的读取、修改、写回和下发。
+var policyUpdateMu sync.Mutex
+
+// SetStatementIPRanges 修改指定策略模板中的语句并立即下发到 RustFS。
+func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, error) {
+	if IsServicePolicy(policyName) {
+		return nil, ErrServicePolicy
+	}
+	spec, ok := editablePolicies[policyName]
+	if !ok {
+		return nil, ErrUnsupportedPolicy
+	}
+	policyUpdateMu.Lock()
+	defer policyUpdateMu.Unlock()
+
+	normalized, rendered, err := m.renderUpdatedPolicy(policyName, sid, cidrs, opts)
+	if err != nil {
+		return nil, err
+	}
+	users, groups, err := m.policyAttachments(ctx, policyName, spec.group)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.ReplacePolicy(ctx, policyName, rendered, users, groups); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+// renderUpdatedPolicy 修改模板、原子写回并更新内存文档。
+func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, []byte, error) {
+	spec, ok := editablePolicies[policyName]
+	if !ok {
+		return nil, nil, ErrUnsupportedPolicy
+	}
+	normalized, err := NormalizeCIDRs(cidrs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if m.PolicyDir == "" {
+		return nil, nil, fmt.Errorf("%w: policy 目录未配置", ErrPolicyWrite)
+	}
+	path := filepath.Join(m.PolicyDir, spec.file)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("读取策略 %s: %v", path, err)
+	}
+	updated, err := SetStatementSourceIP(raw, sid, normalized)
+	if err != nil {
+		return nil, nil, err
+	}
+	rendered, err := RenderPolicy(path, updated, opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	if err := validatePolicyJSON(rendered); err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	if err := writeFileAtomic(path, updated); err != nil {
+		return nil, nil, fmt.Errorf("%w: %s: %v", ErrPolicyWrite, path, err)
+	}
+	if m.Policies != nil {
+		if err := m.Policies.SetDocument(policyName, rendered); err != nil {
+			return nil, nil, err
+		}
+	}
+	return normalized, rendered, nil
+}
+
+// policyAttachments 返回绑定指定策略的用户和组，并保证绑定组在列表中。
+func (m *Manager) policyAttachments(ctx context.Context, policyName, group string) ([]string, []string, error) {
+	if m.Admin == nil {
+		return nil, nil, errors.New("RustFS 管理客户端未初始化")
+	}
+	allUsers, err := m.Admin.ListUsers(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("列出用户: %w", err)
+	}
+	var users []string
+	for name, info := range allUsers {
+		if info.PolicyName == policyName {
+			users = append(users, name)
+		}
+	}
+	allGroups, err := m.Admin.ListGroups(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("列出组: %w", err)
+	}
+	groups := []string{group}
+	for _, name := range allGroups {
+		if name == group {
+			continue
+		}
+		desc, err := m.Admin.GetGroupDescription(ctx, name)
+		if err != nil {
+			continue
+		}
+		if desc.Policy == policyName {
+			groups = append(groups, name)
+		}
+	}
+	return users, groups, nil
+}
+
+// writeFileAtomic 先写同目录临时文件再 rename，避免中途失败留下半个文件。
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".policy-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func setSourceIPCondition(statement map[string]any, cidrs []string) error {
