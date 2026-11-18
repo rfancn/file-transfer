@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/minio/madmin-go/v3"
 )
 
 func TestNormalizeCIDRs(t *testing.T) {
@@ -368,6 +371,9 @@ func TestRenderUpdatedPolicyWritesFileAndMemory(t *testing.T) {
 	if !strings.Contains(string(onDisk), `"aws:SourceIp"`) {
 		t.Fatalf("模板文件未写入条件: %s", onDisk)
 	}
+	if !strings.Contains(string(onDisk), "{{SHARED_DIR_OBJECT_ARNS}}") {
+		t.Fatalf("模板占位符被替换，写回了渲染内容: %s", onDisk)
+	}
 	mem, err := policies.Document(UserGroupPol)
 	if err != nil {
 		t.Fatal(err)
@@ -423,5 +429,60 @@ func TestSetStatementIPRangesRejectsServicePolicy(t *testing.T) {
 	_, err := m.SetStatementIPRanges(context.Background(), DataPolicy, "UploadWrite", []string{"10.0.0.0/8"}, PolicyOptions{})
 	if !errors.Is(err, ErrServicePolicy) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestHasPolicy(t *testing.T) {
+	tests := []struct {
+		value, name string
+		want        bool
+	}{
+		{"ft-user-policy", "ft-user-policy", true},
+		{"other, ft-user-policy", "ft-user-policy", true},
+		{" ft-user-policy , other", "ft-user-policy", true},
+		{"other", "ft-user-policy", false},
+		{"", "ft-user-policy", false},
+	}
+	for _, tt := range tests {
+		if got := hasPolicy(tt.value, tt.name); got != tt.want {
+			t.Fatalf("hasPolicy(%q, %q) = %v, want %v", tt.value, tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestCollectPolicyAttachments(t *testing.T) {
+	users := map[string]madmin.UserInfo{
+		"alice": {PolicyName: "ft-user-policy"},
+		"bob":   {PolicyName: "other, ft-user-policy"},
+		"carol": {PolicyName: "other"},
+	}
+	groups := []string{"ft-user-group", "extra", "other-group"}
+	getGroup := func(name string) (*madmin.GroupDesc, error) {
+		switch name {
+		case "extra":
+			return &madmin.GroupDesc{Name: name, Policy: "ft-user-policy"}, nil
+		case "other-group":
+			return &madmin.GroupDesc{Name: name, Policy: "other"}, nil
+		default:
+			return &madmin.GroupDesc{Name: name}, nil
+		}
+	}
+	userNames, groupNames, err := collectPolicyAttachments(UserGroupPol, UserGroup, users, groups, getGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(userNames)
+	if len(userNames) != 2 || userNames[0] != "alice" || userNames[1] != "bob" {
+		t.Fatalf("users = %v", userNames)
+	}
+	if len(groupNames) != 2 || groupNames[0] != UserGroup || groupNames[1] != "extra" {
+		t.Fatalf("groups = %v", groupNames)
+	}
+
+	_, _, err = collectPolicyAttachments(UserGroupPol, UserGroup, users, []string{"broken"}, func(string) (*madmin.GroupDesc, error) {
+		return nil, errors.New("boom")
+	})
+	if err == nil {
+		t.Fatal("期望组描述读取失败时返回错误")
 	}
 }

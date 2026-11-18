@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"time"
+
+	"github.com/minio/madmin-go/v3"
 )
 
 const maxCIDRs = 100
@@ -22,6 +24,7 @@ var (
 	ErrInvalidCIDR       = errors.New("无效的 IP 网段")
 	ErrInvalidPolicy     = errors.New("策略内容无效")
 	ErrPolicyWrite       = errors.New("写入策略文件失败")
+	ErrApplyFailed       = errors.New("策略已持久化但下发 RustFS 失败")
 )
 
 // editablePolicies 是允许设置 IP 白名单的策略到模板文件和绑定组的映射。
@@ -132,10 +135,8 @@ func SetStatementSourceIP(policy []byte, sid string, cidrs []string) ([]byte, er
 	return append(out, '\n'), nil
 }
 
-// policyUpdateMu 串行化策略模板的读取、修改、写回和下发。
-var policyUpdateMu sync.Mutex
-
 // SetStatementIPRanges 修改指定策略模板中的语句并立即下发到 RustFS。
+// 所有策略写操作共享 policyWriteMu（定义在 iam.go）。
 func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid string, cidrs []string, opts PolicyOptions) ([]string, error) {
 	if IsServicePolicy(policyName) {
 		return nil, ErrServicePolicy
@@ -144,19 +145,25 @@ func (m *Manager) SetStatementIPRanges(ctx context.Context, policyName, sid stri
 	if !ok {
 		return nil, ErrUnsupportedPolicy
 	}
-	policyUpdateMu.Lock()
-	defer policyUpdateMu.Unlock()
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
+
+	// 先发现绑定关系，RustFS 列举失败时不修改本地模板。
+	users, groups, err := m.policyAttachments(ctx, policyName, spec.group)
+	if err != nil {
+		return nil, err
+	}
 
 	normalized, rendered, err := m.renderUpdatedPolicy(policyName, sid, cidrs, opts)
 	if err != nil {
 		return nil, err
 	}
-	users, groups, err := m.policyAttachments(ctx, policyName, spec.group)
-	if err != nil {
-		return nil, err
-	}
-	if err := m.ReplacePolicy(ctx, policyName, rendered, users, groups); err != nil {
-		return nil, err
+
+	// 文件已落盘，后续下发不应因客户端断开而中途取消。
+	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := m.replacePolicy(applyCtx, policyName, rendered, users, groups); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrApplyFailed, err)
 	}
 	return normalized, nil
 }
@@ -177,7 +184,7 @@ func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, op
 	path := filepath.Join(m.PolicyDir, spec.file)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取策略 %s: %v", path, err)
+		return nil, nil, fmt.Errorf("%w: 读取策略 %s: %v", ErrPolicyWrite, path, err)
 	}
 	updated, err := SetStatementSourceIP(raw, sid, normalized)
 	if err != nil {
@@ -193,12 +200,47 @@ func (m *Manager) renderUpdatedPolicy(policyName, sid string, cidrs []string, op
 	if err := writeFileAtomic(path, updated); err != nil {
 		return nil, nil, fmt.Errorf("%w: %s: %v", ErrPolicyWrite, path, err)
 	}
-	if m.Policies != nil {
-		if err := m.Policies.SetDocument(policyName, rendered); err != nil {
-			return nil, nil, err
-		}
+	if m.Policies == nil {
+		return nil, nil, fmt.Errorf("%w: 内存策略未加载", ErrPolicyWrite)
+	}
+	if err := m.Policies.SetDocument(policyName, rendered); err != nil {
+		return nil, nil, err
 	}
 	return normalized, rendered, nil
+}
+
+// hasPolicy 判断逗号分隔的策略列表是否包含 name。
+func hasPolicy(value, name string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.TrimSpace(part) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// collectPolicyAttachments 从用户/组信息中筛出绑定指定策略的实体。
+func collectPolicyAttachments(policyName, boundGroup string, users map[string]madmin.UserInfo, groups []string, getGroup func(string) (*madmin.GroupDesc, error)) ([]string, []string, error) {
+	var userNames []string
+	for name, info := range users {
+		if hasPolicy(info.PolicyName, policyName) {
+			userNames = append(userNames, name)
+		}
+	}
+	groupNames := []string{boundGroup}
+	for _, name := range groups {
+		if name == boundGroup {
+			continue
+		}
+		desc, err := getGroup(name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("读取组 %s: %w", name, err)
+		}
+		if hasPolicy(desc.Policy, policyName) {
+			groupNames = append(groupNames, name)
+		}
+	}
+	return userNames, groupNames, nil
 }
 
 // policyAttachments 返回绑定指定策略的用户和组，并保证绑定组在列表中。
@@ -210,34 +252,21 @@ func (m *Manager) policyAttachments(ctx context.Context, policyName, group strin
 	if err != nil {
 		return nil, nil, fmt.Errorf("列出用户: %w", err)
 	}
-	var users []string
-	for name, info := range allUsers {
-		if info.PolicyName == policyName {
-			users = append(users, name)
-		}
-	}
 	allGroups, err := m.Admin.ListGroups(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("列出组: %w", err)
 	}
-	groups := []string{group}
-	for _, name := range allGroups {
-		if name == group {
-			continue
-		}
-		desc, err := m.Admin.GetGroupDescription(ctx, name)
-		if err != nil {
-			continue
-		}
-		if desc.Policy == policyName {
-			groups = append(groups, name)
-		}
-	}
-	return users, groups, nil
+	return collectPolicyAttachments(policyName, group, allUsers, allGroups, func(name string) (*madmin.GroupDesc, error) {
+		return m.Admin.GetGroupDescription(ctx, name)
+	})
 }
 
 // writeFileAtomic 先写同目录临时文件再 rename，避免中途失败留下半个文件。
 func writeFileAtomic(path string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".policy-*.json")
 	if err != nil {
 		return err
@@ -248,10 +277,14 @@ func writeFileAtomic(path string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, mode); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

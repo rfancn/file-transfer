@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/madmin-go/v3"
@@ -140,7 +141,17 @@ func (m *Manager) EnsurePolicy(ctx context.Context, name string, policy []byte) 
 	return err
 }
 
+// policyWriteMu 串行化所有策略写操作（模板写回与策略下发）。
+var policyWriteMu sync.Mutex
+
+// ReplacePolicy 替换策略并恢复绑定；所有策略写操作共享同一把锁。
 func (m *Manager) ReplacePolicy(ctx context.Context, name string, policy []byte, users, groups []string) error {
+	policyWriteMu.Lock()
+	defer policyWriteMu.Unlock()
+	return m.replacePolicy(ctx, name, policy, users, groups)
+}
+
+func (m *Manager) replacePolicy(ctx context.Context, name string, policy []byte, users, groups []string) error {
 	existing, err := m.Admin.InfoCannedPolicy(ctx, name)
 	if err != nil {
 		low := strings.ToLower(err.Error())
