@@ -172,6 +172,15 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 	sid := strings.TrimSpace(sids[sidIdx])
 	policyName := names[idx]
 
+	if !cliui.IsInteractive() {
+		runPolicyIPOperations(ac, policyName, sid)
+		return
+	}
+	runPolicyIPWhitelist(ac, policyName, sid)
+}
+
+// runPolicyIPOperations 是非交互终端的退化菜单。
+func runPolicyIPOperations(ac *adminapi.Client, policyName, sid string) {
 	for {
 		op, err := cliui.Select("选择操作", []string{
 			"查看当前 IP 白名单",
@@ -205,6 +214,110 @@ func runPolicyIPMenu(ac *adminapi.Client) {
 	}
 }
 
+type policyIPAction struct {
+	kind string
+	cidr string
+}
+
+const (
+	ipActionEntry  = "entry"
+	ipActionDelete = "delete"
+	ipActionAdd    = "add"
+	ipActionSet    = "set"
+	ipActionClear  = "clear"
+	ipActionReturn = "return"
+)
+
+// runPolicyIPWhitelist 直接展示当前 IP 白名单并用多选列表操作。
+func runPolicyIPWhitelist(ac *adminapi.Client, policyName, sid string) {
+	checked := map[string]bool{}
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cidrs, err := ac.GetStatementIPRanges(ctx, policyName, sid)
+		cancel()
+		if err != nil {
+			failf("读取 IP 白名单失败: %v", err)
+			return
+		}
+		items, actions := buildPolicyIPItems(cidrs, checked)
+		label := fmt.Sprintf("策略 %s 语句 %s 的 IP 白名单", policyName, sid)
+		if len(cidrs) == 0 {
+			label += "（当前为空）"
+		}
+		idx, err := cliui.MultiSelect(label, items)
+		if canceledByUser(err) {
+			return
+		}
+		if err != nil {
+			failf("选择操作失败: %v", err)
+			return
+		}
+		for i, action := range actions {
+			if action.kind == ipActionEntry && items[i].Touched {
+				checked[action.cidr] = items[i].Checked
+			}
+		}
+		switch actions[idx].kind {
+		case ipActionEntry:
+			continue
+		case ipActionDelete:
+			selected := checkedIPs(items, actions)
+			if len(selected) == 0 {
+				fmt.Println("未选择任何 IP 或网段")
+				continue
+			}
+			removePolicyIPs(ac, policyName, sid, selected)
+			checked = map[string]bool{}
+		case ipActionAdd:
+			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeAdd)
+			checked = map[string]bool{}
+		case ipActionSet:
+			changePolicyIPsMenu(ac, policyName, sid, iam.IPRangeSet)
+			checked = map[string]bool{}
+		case ipActionClear:
+			clearPolicyIPs(ac, policyName, sid)
+			checked = map[string]bool{}
+		case ipActionReturn:
+			return
+		}
+	}
+}
+
+// buildPolicyIPItems 把当前 IP 白名单和操作项转为多选列表。
+func buildPolicyIPItems(cidrs []string, checked map[string]bool) ([]cliui.MultiItem, []policyIPAction) {
+	items := make([]cliui.MultiItem, 0, len(cidrs)+5)
+	actions := make([]policyIPAction, 0, len(cidrs)+5)
+	for _, cidr := range cidrs {
+		items = append(items, cliui.MultiItem{Text: cidr, Selectable: true, Checked: checked[cidr]})
+		actions = append(actions, policyIPAction{kind: ipActionEntry, cidr: cidr})
+	}
+	for _, action := range []struct {
+		text string
+		kind string
+	}{
+		{"[删除选中项]", ipActionDelete},
+		{"[添加 IP 或网段]", ipActionAdd},
+		{"[覆盖设置]", ipActionSet},
+		{"[清空]", ipActionClear},
+		{"[返回]", ipActionReturn},
+	} {
+		items = append(items, cliui.MultiItem{Text: action.text})
+		actions = append(actions, policyIPAction{kind: action.kind})
+	}
+	return items, actions
+}
+
+// checkedIPs 返回当前勾选的 IP 或网段。
+func checkedIPs(items []cliui.MultiItem, actions []policyIPAction) []string {
+	out := make([]string, 0, len(items))
+	for i, action := range actions {
+		if action.kind == ipActionEntry && items[i].Checked {
+			out = append(out, action.cidr)
+		}
+	}
+	return out
+}
+
 func listPolicyIPs(ac *adminapi.Client, policyName, sid string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -233,57 +346,24 @@ func promptIPs() ([]string, bool) {
 	return cidrs, true
 }
 
-// removePolicyIPsMenu 以多选列表展示当前 IP 白名单，勾选后批量移除。
+// removePolicyIPsMenu 在非交互菜单中读取要移除的 IP 或网段。
 func removePolicyIPsMenu(ac *adminapi.Client, policyName, sid string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	cidrs, err := ac.GetStatementIPRanges(ctx, policyName, sid)
-	cancel()
-	if err != nil {
-		failf("读取 IP 白名单失败: %v", err)
+	cidrs, ok := promptIPs()
+	if !ok {
 		return
 	}
-	if len(cidrs) == 0 {
-		fmt.Println("当前没有 IP 白名单")
-		return
-	}
+	removePolicyIPs(ac, policyName, sid, cidrs)
+}
 
-	var remove []string
-	if cliui.IsInteractive() {
-		items := make([]cliui.MultiItem, len(cidrs))
-		for i, cidr := range cidrs {
-			items[i] = cliui.MultiItem{Text: cidr, Selectable: true}
-		}
-		if _, err := cliui.MultiSelect("选择要移除的 IP 或网段（空格勾选，回车确认）", items); err != nil {
-			if canceledByUser(err) {
-				return
-			}
-			failf("选择 IP 或网段失败: %v", err)
-			return
-		}
-		for _, item := range items {
-			if item.Checked {
-				remove = append(remove, item.Text)
-			}
-		}
-		if len(remove) == 0 {
-			fmt.Println("未选择任何 IP 或网段，已取消")
-			return
-		}
-	} else {
-		cidrsToRemove, ok := promptIPs()
-		if !ok {
-			return
-		}
-		remove = cidrsToRemove
-	}
-
-	fmt.Printf("将从策略 %s 语句 %s 移除：%s\n", policyName, sid, strings.Join(remove, ", "))
+// removePolicyIPs 确认并批量移除指定的 IP 或网段。
+func removePolicyIPs(ac *adminapi.Client, policyName, sid string, cidrs []string) {
+	fmt.Printf("将从策略 %s 语句 %s 移除：%s\n", policyName, sid, strings.Join(cidrs, ", "))
 	if !confirm("确认移除") {
 		return
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, remove, iam.IPRangeRemove)
+	res, err := ac.ChangeStatementIPRanges(ctx, policyName, sid, cidrs, iam.IPRangeRemove)
 	if err != nil {
 		failf("移除 IP 白名单失败: %v", err)
 		return
