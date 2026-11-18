@@ -184,9 +184,6 @@ func (h *Handler) isRegisteredUser(ctx context.Context, username string) bool {
 	if err != nil {
 		return false
 	}
-	if info.PolicyName == iam.UserPolicyName(username) {
-		return true
-	}
 	for _, g := range info.MemberOf {
 		if g == iam.UserGroup {
 			return true

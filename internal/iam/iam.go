@@ -105,8 +105,6 @@ func splitEndpoint(endpoint string) (string, bool) {
 	return endpoint, strings.HasPrefix(endpoint, "https://")
 }
 
-func UserPolicyName(user string) string { return "ft-user-" + user + "-policy" }
-
 func (m *Manager) UserExists(ctx context.Context, name string) (bool, error) {
 	_, err := m.Admin.GetUserInfo(ctx, name)
 	if err == nil {
@@ -363,15 +361,12 @@ func (m *Manager) DeleteUser(ctx context.Context, user string) (bool, int, error
 	if err != nil {
 		return false, n, fmt.Errorf("清理用户数据 %s: %w", user, err)
 	}
-	oldPolicy := UserPolicyName(user)
-	_ = m.Detach(ctx, oldPolicy, user, "")
 	for _, g := range info.MemberOf {
 		_ = m.RemoveFromGroup(ctx, g, user)
 	}
 	if err := m.Admin.RemoveUser(ctx, user); err != nil {
 		return true, n, err
 	}
-	_ = m.Admin.RemoveCannedPolicy(ctx, oldPolicy)
 	return true, n, nil
 }
 

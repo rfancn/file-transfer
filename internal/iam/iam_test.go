@@ -503,12 +503,6 @@ func TestIsSystemUser(t *testing.T) {
 	}
 }
 
-func TestUserPolicyName(t *testing.T) {
-	if got := UserPolicyName("alice"); got != "ft-user-alice-policy" {
-		t.Fatalf("got %s", got)
-	}
-}
-
 func TestPolicyTemplateSIDs(t *testing.T) {
 	expected := map[string][]string{
 		policyUserGroupFile: {
