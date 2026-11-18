@@ -21,7 +21,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 COPY --from=builder /out/ft-server /app/ft-server
 COPY config/ft-server.example.toml /app/ft-server.toml.default
-COPY --from=builder /src/policy /etc/file-transfer/policy
+COPY --from=builder /src/policy /app/policy
 COPY script/docker-entrypoint.sh /app/entrypoint.sh
 
 RUN chmod +x /app/ft-server /app/entrypoint.sh \

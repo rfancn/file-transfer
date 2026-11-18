@@ -235,7 +235,8 @@ ft-admin policy ip ft-user-policy UploadWrite 10.0.0.0/8 --yes
 
 ## 8. 部署与文档
 
-- `docker-compose.yml`：`./policy:/etc/file-transfer/policy:ro` 改为可写挂载；
+- `docker-compose.yml`：`./policy` 挂载到容器工作目录下的 `/app/policy`（可写）；
+- 策略目录固定为工作目录下的 `policy`，不再回退到配置文件所在目录；
 - README 增加：
   - 新接口说明与错误码；
   - `ft-admin policy ip` 用法；

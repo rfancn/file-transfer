@@ -42,7 +42,7 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("管理身份客户端: %w", err)
 	}
-	policyDir := resolvePolicyDir(rt.ConfigPath)
+	policyDir := resolvePolicyDir()
 	policies, err := iam.LoadPolicies(policyDir, iam.PolicyOptions{
 		HomeBucket:   cfg.S3.HomeBucket,
 		SharedBucket: cfg.S3.SharedBucket,
@@ -85,20 +85,14 @@ func New(cfg config.ServerConfig, rt config.Runtime) (*Server, error) {
 	return s, nil
 }
 
-// resolvePolicyDir 返回策略目录，固定为 policy。先按工作目录查找，
-// 再按配置文件所在目录查找，以便本地、systemd 和 Docker 共用同一份配置。
-func resolvePolicyDir(configPath string) string {
-	const dir = "policy"
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return dir
+// resolvePolicyDir 返回工作目录下的 policy 目录。
+// 策略只从工作目录加载，不回退到配置文件所在目录。
+func resolvePolicyDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "policy"
 	}
-	if configPath != "" {
-		fallback := filepath.Join(filepath.Dir(configPath), dir)
-		if info, err := os.Stat(fallback); err == nil && info.IsDir() {
-			return fallback
-		}
-	}
-	return dir
+	return filepath.Join(wd, "policy")
 }
 
 func (s *Server) Start() error {

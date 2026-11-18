@@ -236,9 +236,10 @@ make build
 > - 升级后重启 `ft-server` 并重新执行 `ft-admin init`，以创建共享桶、共享目录和新组策略。
 > - `v0.0.1` 及更早版本为每个用户创建并绑定了 `ft-user-<username>-policy`；`v0.0.2` 起不再创建新的单用户策略，仅使用组策略，但不会自动解绑从旧版本升级上来的策略。这些旧策略不含 `aws:SourceIp` 条件；如果只给 `ft-user-policy` 设置 IP 白名单，仍绑定旧策略的用户可能绕过限制。请用 `ft-admin user list` 查看“策略”列，对仍显示 `ft-user-*-policy` 的用户先解绑再删除旧策略；`ft-admin init` 不会自动清理它们。已删除用户后遗留的同名策略才是真正的孤儿策略，可以安全清理。
 > - 解绑/删除旧策略可使用 RustFS Console，或使用 `mc admin policy detach <alias> ft-user-<username>-policy --user <username>` 与 `mc admin policy remove <alias> ft-user-<username>-policy`；删除前请确认没有用户或组仍引用。`ft-admin` 目前没有策略解绑/删除命令。
-> - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`，去掉 policy 挂载的 `:ro`，否则调用白名单接口会返回 `policy_write_failed`。
+> - 已部署 Docker 的环境，请同步更新 `docker-compose.yml`：policy 挂载改为 `./policy:/app/policy`（可写），否则策略目录和 IP 白名单接口都会失效。
 > - 将新版本带 `Sid` 的 `policy/*.json` 合并到服务端策略目录后再重启并执行 `ft-admin init`；旧模板缺少 Sid 时接口会返回 `sid_not_found`，仅执行 `ft-admin init` 不会补上 Sid。
 > - 如需使用 IP 白名单，策略目录必须由运行 `ft-server` 的用户可写（非 Docker / rootless 部署请检查属主和权限）。
+> - 策略目录改为工作目录下的 `policy`（Docker 为 `/app/policy`），不再回退到配置文件目录；升级时请把原 `/etc/file-transfer/policy` 移动到新位置。
 
 首次启动时：
 
@@ -254,7 +255,7 @@ ExecStart=/usr/local/bin/ft-server -c /etc/file-transfer/ft-server.toml
 Restart=always
 ```
 
-把仓库根目录的 `policy/` 复制到 `/etc/file-transfer/policy`。`ft-server` 固定使用 `policy` 目录，会先按工作目录、再按配置文件所在目录查找，无需额外配置。
+把仓库根目录的 `policy/` 复制到 `ft-server` 工作目录下的 `policy/`（上面的 systemd 示例即 `/var/lib/ft-server/policy`）。`ft-server` 只从工作目录加载策略，不再回退到配置文件所在目录。
 
 #### Docker Compose 部署
 
@@ -264,7 +265,7 @@ Restart=always
 docker compose up -d --build
 ```
 
-配置、密钥和日志分别持久化到 `./config`、`./secrets`、`./logs`（日志文件为 `./logs/ft-server/ft-server.log`）。首次启动会自动生成 `./config/ft-server.toml`；如需自定义配置，可先复制示例文件再启动：
+配置、密钥、策略和日志分别持久化到 `./config`、`./secrets`、`./policy`、`./logs`（日志文件为 `./logs/ft-server/ft-server.log`）。首次启动会自动生成 `./config/ft-server.toml`；如需自定义配置，可先复制示例文件再启动：
 
 ```sh
 cp config/ft-server.example.toml config/ft-server.toml
@@ -298,8 +299,8 @@ IAM 策略从代码中抽离到仓库根目录 `policy/`：
 - `shared-operator-group` 对共享桶有 list/get/put/delete，但不包含 `admin:*` 和桶删除权限。
 - `ft-data` 不授予 Delete 权限；`ft-admin clean` 使用 `ft-admin` 服务身份执行删除。
 - `ft-server` 启动时加载策略；文件缺失、JSON 非法或残留未知占位符会启动失败。
-- 策略目录固定为 `policy`，依次在工作目录和配置文件所在目录查找，无需配置。
-- Docker 镜像内默认 `/etc/file-transfer/policy`，`docker-compose.yml` 已把 `./policy` 挂载到该路径（可写，供策略 IP 白名单修改模板）。
+- 策略目录固定为工作目录下的 `policy`，只从此处加载，不再回退到配置文件所在目录。
+- Docker 镜像内默认 `/app/policy`，`docker-compose.yml` 已把 `./policy` 挂载到该路径（可写，供策略 IP 白名单修改模板）。
 - 手工修改 `policy/*.json` 后，需要重启 `ft-server` 并执行 `ft-admin init` 使策略在 RustFS 生效。
 - 通过管理接口或 `ft-admin policy ip` 修改时，规则会立即下发到 RustFS，无需重启。
 - 使用 IP 白名单功能时，运行 `ft-server` 的用户必须对服务端 `policy/` 目录有写权限；不使用该功能时只读即可。
