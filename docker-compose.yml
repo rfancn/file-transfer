@@ -12,6 +12,6 @@ services:
     volumes:
       # 与容器内默认配置路径、日志路径保持一致，无需额外环境变量
       - ./config:/etc/file-transfer
-      - ./policy:/etc/file-transfer/policy:ro
+      - ./policy:/etc/file-transfer/policy
       - ./secrets:/app/secrets
       - ./logs:/var/log/file-transfer
