@@ -393,9 +393,11 @@ ft-admin policy ip ft-user-policy UploadWrite --clear
 | 策略 | Sid | 说明 |
 |---|---|---|
 | `ft-user-policy` | `UploadWrite` | 自己的 `upload/` 写/删 |
+| `ft-user-policy` | `UploadRead` | 自己的 `upload/` 读 |
 | `ft-user-policy` | `SharedRead` | 读取 `s3.shared_dirs` 共享目录中的对象 |
 | `ft-operator-policy` | `InboundWrite` | 所有用户 `inbound` 写/删 |
 | `ft-operator-policy` | `OutboundRead` | 读取所有用户 `outbound` |
+| `ft-operator-policy` | `UploadWrite` | 所有用户 `upload` 写 |
 | `shared-operator-policy` | `SharedWrite` | 写/删共享桶对象 |
 
 完整 Sid 列表见 `policy/*.json` 中的 `Sid` 字段。

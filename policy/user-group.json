@@ -59,6 +59,20 @@
       ]
     },
     {
+      "Sid": "UploadRead",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectAttributes",
+        "s3:GetObjectTagging",
+        "s3:GetObjectRetention",
+        "s3:GetObjectLegalHold"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{HOME_BUCKET}}/${aws:username}/upload/*"
+      ]
+    },
+    {
       "Sid": "UploadMarkerProtect",
       "Action": [
         "s3:DeleteObject",

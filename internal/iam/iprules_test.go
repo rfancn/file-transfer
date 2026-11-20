@@ -509,7 +509,7 @@ func TestPolicySids(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"HomeBucketMetadata", "ListOwnDirs", "UploadWrite",
+		"HomeBucketMetadata", "ListOwnDirs", "UploadWrite", "UploadRead",
 		"SharedBucketMetadata", "SharedRootList", "SharedDirList", "SharedRead",
 	}
 	if len(sids) != len(want) {
