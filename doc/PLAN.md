@@ -53,17 +53,17 @@ shared/
 
 | 身份 | inbound | outbound | upload |
 |---|---|---|---|
-| `<user>`（Console） | List | List | List、Put、Delete（目录标记除外） |
+| `<user>`（Console） | List | List | List、Get、Put、Delete（目录标记除外） |
 | `ft-data`（数据面） | List、Get | List、Put | List、Get |
 | `ft-admin`（管理面） | 管理、删除 | 管理、删除 | 管理、删除 |
-| `ft-operator-group`（操作员组） | List、Put、递归 List、Delete（`.keep` 除外） | List、Get | 无 |
+| `ft-operator-group`（操作员组） | List、Put、递归 List、Delete（`.keep` 除外） | List、Get | List、Put |
 | `shared-operator-group`（共享操作员组） | 共享桶：List、Get、Put、Delete；不能删除桶 | — | — |
 | `ft-client`（经 ft-server） | List、Get | List、Put | List、Get |
 
 - 用户个人策略限制在自己的 `<username>/` 前缀内。
 - `ft-data` 只写 `outbound`，只读 `inbound`/`upload`，并可为三个目录创建 `.keep` 占位。
-- `ft-operator-group` 可浏览所有用户的 `inbound`/`outbound`，可递归列出并删除 `inbound` 内容；`inbound/.keep` 显式 Deny 删除；不能进入 `upload`。
-- 普通用户在 Console/Cyberduck 中只能操作自己的 `inbound`/`outbound`/`upload`：三个目录都可列出，`upload/*` 可写入和删除，但 `upload/.keep` 受 Deny 保护，不能删除 `upload` 目录本身；`inbound`/`outbound` 不可下载、不可写入、不可删除。
+- `ft-operator-group` 可递归列出所有用户的 `inbound`/`outbound`/`upload`，可删除 `inbound` 内容；`inbound/.keep` 显式 Deny 删除；`outbound` 可读取，`upload` 可写入，但不授予 `upload` 读取和删除权限。
+- 普通用户在 Console/Cyberduck 中只能操作自己的 `inbound`/`outbound`/`upload`：三个目录都可列出，`upload/*` 可读取、写入和删除，但 `upload/.keep` 受 Deny 保护，不能删除 `upload` 目录本身；`inbound`/`outbound` 不可下载、不可写入、不可删除。
 - 用户组策略不授予 `s3:ListAllMyBuckets`，home 桶根目录不可列；Cyberduck 默认路径需设为 `home/<username>`。
 - 普通用户组对 `shared` 桶只能列出桶根和 `s3.shared_dirs` 配置目录，并读取这些目录下的对象。
 - `shared-operator-group` 对 `shared` 桶有 list/get/put/delete，但显式 Deny 删除桶，且不包含 `admin:*` 权限。

@@ -88,8 +88,8 @@ func TestUserGroupPolicyUploadScope(t *testing.T) {
 			}
 			if action == "s3:GetObject" {
 				for _, res := range st.Resource {
-					if !strings.HasPrefix(res, "arn:aws:s3:::shared/") {
-						t.Fatalf("user group GetObject outside shared dirs: %s", res)
+					if !strings.HasPrefix(res, "arn:aws:s3:::shared/") && res != uploadResource {
+						t.Fatalf("user group GetObject outside shared dirs or own upload: %s", res)
 					}
 				}
 			}
@@ -590,12 +590,13 @@ func TestPoliciesConcurrentDocumentAccess(t *testing.T) {
 func TestPolicyTemplateSIDs(t *testing.T) {
 	expected := map[string][]string{
 		policyUserGroupFile: {
-			"HomeBucketMetadata", "ListOwnDirs", "UploadWrite", "UploadMarkerProtect",
+			"HomeBucketMetadata", "ListOwnDirs", "UploadWrite", "UploadRead", "UploadMarkerProtect",
 			"SharedBucketMetadata", "SharedRootList", "SharedDirList", "SharedRead",
 		},
 		policyOperatorFile: {
 			"ListAllBuckets", "HomeBucketMetadata", "ListRootDirs", "ListInboundRecursive",
-			"UploadDirDeny", "OutsideInboundDeny", "InboundWrite", "InboundMarkerProtect", "OutboundRead",
+			"ListUploadRecursive", "ListOutboundRecursive", "OutsideInboundDeny", "InboundWrite", "InboundMarkerProtect",
+			"UploadWrite", "OutboundRead",
 		},
 		policySharedOperatorFile: {
 			"SharedBucketMetadata", "SharedBucketList", "SharedMultipart",

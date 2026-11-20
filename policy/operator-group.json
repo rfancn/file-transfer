@@ -43,7 +43,9 @@
             "*/inbound/",
             "*/inbound/*",
             "*/outbound/",
-            "*/outbound/*"
+            "*/outbound/*",
+            "*/upload/",
+            "*/upload/*"
           ]
         }
       },
@@ -71,7 +73,7 @@
       ]
     },
     {
-      "Sid": "UploadDirDeny",
+      "Sid": "ListUploadRecursive",
       "Action": [
         "s3:ListBucket"
       ],
@@ -83,7 +85,25 @@
           ]
         }
       },
-      "Effect": "Deny",
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{HOME_BUCKET}}"
+      ]
+    },
+    {
+      "Sid": "ListOutboundRecursive",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "*/outbound/",
+            "*/outbound/*"
+          ]
+        }
+      },
+      "Effect": "Allow",
       "Resource": [
         "arn:aws:s3:::{{HOME_BUCKET}}"
       ]
@@ -100,7 +120,11 @@
         "StringNotLike": {
           "s3:prefix": [
             "*/inbound/",
-            "*/inbound/*"
+            "*/inbound/*",
+            "*/upload/",
+            "*/upload/*",
+            "*/outbound/",
+            "*/outbound/*"
           ]
         }
       },
@@ -134,6 +158,19 @@
       "Effect": "Deny",
       "Resource": [
         "arn:aws:s3:::{{HOME_BUCKET}}/*/inbound/.keep"
+      ]
+    },
+    {
+      "Sid": "UploadWrite",
+      "Action": [
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts",
+        "s3:PutObjectTagging"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::{{HOME_BUCKET}}/*/upload/*"
       ]
     },
     {
